@@ -172,10 +172,22 @@ function attach_current_thread(ppenv_thread = Ref{Ptr{JNIEnv}}(C_NULL))
 end
 
 function attach_threads()
-    Threads.@threads for i=1:Threads.nthreads()
-        attach_current_thread(Ref(ppenv, Threads.threadid() ))
+    # Each iteration must run on the OS thread whose env pointer we want
+    # to store. Under Threads.@threads's :dynamic schedule (default since
+    # Julia 1.8), iterations can pile up on one thread and miss others, so
+    # request :static scheduling explicitly to bind iteration i to thread i.
+    # On Julia 1.6/1.7, @threads was already static-by-default and the
+    # :static keyword is not accepted by the macro.
+    @static if VERSION >= v"1.8"
+        Threads.@threads :static for i=1:Threads.nthreads()
+            attach_current_thread(Ref(ppenv, i))
+        end
+    else
+        Threads.@threads for i=1:Threads.nthreads()
+            attach_current_thread(Ref(ppenv, i))
+        end
     end
-end  
+end
 
 
 """
