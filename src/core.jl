@@ -109,12 +109,18 @@ function jlocalframe(f::Function, returntype::Type = Any; capacity = 16)
     result_ref = C_NULL
     return_ref = JavaLocalRef(result_ref)
     result = nothing
+    # Holds a strong reference to the original f() return value so that, if
+    # it is a JavaObject, its finalizer cannot fire (and thus DeleteLocalRef
+    # cannot run) between when we extract its raw pointer and when
+    # PopLocalFrame consumes it below.
+    result_keep = nothing
     try
         if returntype == Any
             result = f()
         else
             result = f(returntype)
         end
+        result_keep = result
         if isa(result, JavaObject)
             result = Ptr{Nothing}(result)
         end
@@ -125,7 +131,9 @@ function jlocalframe(f::Function, returntype::Type = Any; capacity = 16)
     catch err
         rethrow(err)
     finally
-        return_ref = JavaLocalRef( JNI.PopLocalFrame(result_ref) )
+        GC.@preserve result_keep begin
+            return_ref = JavaLocalRef( JNI.PopLocalFrame(result_ref) )
+        end
     end
 
     # Return

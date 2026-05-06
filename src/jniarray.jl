@@ -56,6 +56,12 @@ for primitive in [:jboolean, :jchar, :jbyte, :jshort, :jint, :jlong, :jfloat, :j
         end
         JNIVector{$primitive}(sz::Int) = get_elements!(JNIVector{$primitive}($new_array(sz)))
         function release_elements(arg::JNIVector{$primitive})
+            # Idempotent: if already released, do nothing. Both convert_arg
+            # (which calls release_elements before re-passing the JNIVector
+            # into another jcall) and the finalizer can run multiple times,
+            # and pointer(nothing) would otherwise MethodError on the second
+            # call.
+            arg.arr === nothing && return
             # Make sure that JVM has not been destroyed
             if JNI.ppenv[1] != C_NULL
                 arr = arg.arr
