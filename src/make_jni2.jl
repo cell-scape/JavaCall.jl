@@ -120,8 +120,12 @@ for line in open(readlines, "jnienv.jl", "r")
   # Group 3: Argument name (\w+)
   mm = map(x->match(r"^\s* (?:const\s+)? \s* ((?:void|j\w+|char|JNI\w+|JavaVM)) \s*? (\**) \s* (\w+) \s*$"x, x), args)
 
-  # skip the JNIEnv arg for julia since it is passed as a global to ccall
-  julia_args = join(push!(map(julia_arg, mm)[2:end],"penv=ppenv[]"), ", ")
+  # skip the JNIEnv arg for julia since it is passed as a global to ccall.
+  # Default penv to the current thread's slot to match the committed
+  # output in JNI.jl. (Phase 2 will redo this layer entirely; the only
+  # purpose of keeping this aligned is to prevent silent regressions
+  # from someone re-running the generator.)
+  julia_args = join(push!(map(julia_arg, mm)[2:end],"penv=ppenv[ Threads.threadid() ]"), ", ")
   arg_types = join(map(ccall_arg_type, mm), ", ")
   arg_names = join(map(arg_value, mm), ", ")
 
