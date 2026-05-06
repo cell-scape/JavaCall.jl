@@ -456,6 +456,25 @@ end
     end
 end
 
+@testset "env_cache_per_thread" begin
+    # The OncePerThread cache should give different envs on different OS threads.
+    # Until phase-2/jcall-rewrite, with_env is not on the call hot path; this test
+    # exercises the cache directly.
+    nthreads = Base.Threads.nthreads()
+    if nthreads >= 2
+        envs = Vector{Ptr{JavaCall.JNI.JNIEnv}}(undef, nthreads)
+        Threads.@threads :static for i = 1:nthreads
+            JavaCall.with_env() do env
+                envs[i] = env
+            end
+        end
+        @test all(e != C_NULL for e in envs)
+        @test length(unique(envs)) == nthreads
+    else
+        @test_skip "env_cache_per_thread requires JULIA_NUM_THREADS >= 2"
+    end
+end
+
 include("jcall_macro.jl")
 
 end

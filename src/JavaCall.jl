@@ -36,6 +36,7 @@ include("JNI.jl")
 using .JNI
 import .JNI.Threads
 include("jvm.jl")
+include("env.jl")
 include("core.jl")
 include("convert.jl")
 include("reflect.jl")
