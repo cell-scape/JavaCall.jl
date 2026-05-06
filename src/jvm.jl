@@ -35,15 +35,17 @@ function findjvm()
             push!(javahomes, ENV["JAVA_HOME"])
         end
         @static if Sys.isunix()
-            # Find default javahome by checking location of the java command
+            # Find default javahome by checking location of the java command.
             try
-                javapath = chomp(read(`which java`,String))
-                while(islink(javapath))
-                    javapath = readlink(javapath)
-                end
-                javapath = dirname(javapath)
-                javapath = match(r"(.*)((/jre/bin)|(/bin))+",javapath)[1]
-                push!(javahomes,javapath)
+                javapath = chomp(read(`which java`, String))
+                # realpath canonicalises the full symlink chain in one call,
+                # handling relative readlink results and intermediate hops
+                # (e.g. /usr/bin/java -> /etc/alternatives/java
+                #       -> <javahome>/bin/java). Strip /bin/java (JDK 9+) or
+                # /jre/bin/java (JDK 8) by taking dirname twice; the lib
+                # search below covers both layouts.
+                javapath = realpath(javapath)
+                push!(javahomes, dirname(dirname(javapath)))
             catch err
                 @debug "JavaCall could not determine javapath from `which java`" err
             end
@@ -63,13 +65,20 @@ function findjvm()
             push!(libpaths, joinpath(n, "bin", "client"))
         end
         @static if Sys.islinux()
-            if Sys.WORD_SIZE==64
-                push!(libpaths, joinpath(n, "jre", "lib", "amd64", "server"))
-                push!(libpaths, joinpath(n, "lib", "amd64", "server"))
-            elseif Sys.WORD_SIZE==32
-                push!(libpaths, joinpath(n, "jre", "lib", "i386", "server"))
-
-                push!(libpaths, joinpath(n, "lib", "i386", "server"))
+            # JDK 8-era layout uses an architecture-specific subdirectory
+            # under (jre/)lib/. JDK 9+ collapsed this to lib/server/.
+            arch_dir = if Sys.ARCH === :x86_64
+                "amd64"
+            elseif Sys.ARCH === :aarch64
+                "aarch64"
+            elseif Sys.ARCH === :i686 || Sys.ARCH === :i386
+                "i386"
+            else
+                nothing
+            end
+            if arch_dir !== nothing
+                push!(libpaths, joinpath(n, "jre", "lib", arch_dir, "server"))
+                push!(libpaths, joinpath(n, "lib", arch_dir, "server"))
             end
         end
         push!(libpaths, joinpath(n, "jre", "lib", "server"))
