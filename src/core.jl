@@ -60,6 +60,13 @@ _deleteref(ref::JavaNullRef) = nothing
 function deleteref(x::JavaRef)
     if x.ptr == C_NULL; return; end
     if !JNI.is_env_loaded(); return; end;
+    # JavaObject finalizers can fire on any task/thread, including
+    # contexts from which JNI calls would crash (non-root task without
+    # JULIA_COPY_STACKS, non-thread-1 on Windows). isgoodenv() is the
+    # Bool predicate underlying assertroottask_or_goodenv(); using it
+    # here turns "can't safely delete" into a leak rather than a
+    # segfault in GC.
+    isgoodenv() || return
     _deleteref(x)
     return
 end
@@ -297,7 +304,12 @@ end
 
 # jvalue(v::Integer) = int64(v) << (64-8*sizeof(v))
 jvalue(v::Integer)::JNI.jvalue = JNI.jvalue(v)
-jvalue(v::Float32) = jvalue(reinterpret(Int32, v))
+# Use UInt32 (zero-extension to Int64) rather than Int32 (sign-extension)
+# so the high 4 bytes of the 8-byte jvalue slot are clean. Currently
+# harmless on every Julia-supported architecture (all little-endian, where
+# the JVM reads jfloat from bytes 0-3), but the previous Int32 reinterpret
+# leaked the float's sign bit into bytes 4-7 of the union slot.
+jvalue(v::Float32) = jvalue(reinterpret(UInt32, v))
 jvalue(v::Float64) = jvalue(reinterpret(Int64, v))
 jvalue(v::Ptr) = jvalue(Int(v))
 jvalue(v::JavaObject) = jvalue(Ptr(v))
@@ -521,14 +533,24 @@ end
 function get_exception_string(jthrow)
     jthrowable = JNI.FindClass("java/lang/Throwable")
     _notnull_assert(jthrowable)
-
-    tostring_method = JNI.GetMethodID(jthrowable, "toString", "()Ljava/lang/String;")
-    _notnull_assert(tostring_method)
-
-    res = JNI.CallObjectMethodA(jthrow, tostring_method, Int[])
-    _notnull_assert(res)
-
-    return unsafe_string(JString(res))
+    res = C_NULL
+    try
+        tostring_method = JNI.GetMethodID(jthrowable, "toString", "()Ljava/lang/String;")
+        _notnull_assert(tostring_method)
+        res = JNI.CallObjectMethodA(jthrow, tostring_method, Int[])
+        _notnull_assert(res)
+        # Use the Ptr{Nothing} overload of unsafe_string to copy out the
+        # UTF-8 chars without wrapping res in a JString JavaObject — that
+        # would attach a finalizer racing with the eager DeleteLocalRef
+        # below.
+        return unsafe_string(res)
+    finally
+        # Eagerly free both local refs. A long exception-handling loop
+        # would otherwise exhaust the JNI local ref table waiting on
+        # Julia GC of the (no longer created) JString wrapper.
+        res != C_NULL && JNI.DeleteLocalRef(res)
+        JNI.DeleteLocalRef(jthrowable)
+    end
 end
 
 function geterror()
