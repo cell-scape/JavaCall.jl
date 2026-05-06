@@ -151,7 +151,10 @@ function init_new_vm(libpath,opts)
     create = Libdl.dlsym(libjvm, :JNI_CreateJavaVM)
     opt = [JavaVMOption(pointer(x), C_NULL) for x in opts]
     Threads.resize_nthreads!(ppenv)
-    GC.@preserve opt begin
+    # Preserve both the option struct array AND the underlying option strings:
+    # `opt` holds raw pointers into each string in `opts`, but does not keep
+    # those strings rooted on its own.
+    GC.@preserve opt opts begin
         vm_args = JavaVMInitArgs(JNI_VERSION_1_8, convert(Cint, length(opts)),
                                  convert(Ptr{JavaVMOption}, pointer(opt)), JNI_TRUE)
         res = ccall(create, Cint, (Ptr{Ptr{JavaVM}}, Ptr{Ptr{JNIEnv}}, Ptr{JavaVMInitArgs}), ppjvm, ppenv,
