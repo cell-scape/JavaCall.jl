@@ -90,6 +90,9 @@ const JNI_VERSION_1_6 = convert(Cint, 0x00010006)
 const JNI_VERSION_1_8 = convert(Cint, 0x00010008)
 const JNI_VERSION_9   = convert(Cint, 0x00090000)
 const JNI_VERSION_10  = convert(Cint, 0x000a0000)
+const JNI_VERSION_19  = convert(Cint, 0x00130000)
+const JNI_VERSION_20  = convert(Cint, 0x00140000)
+const JNI_VERSION_21  = convert(Cint, 0x00150000)
 
 const JNI_TRUE = convert(Cchar, 1)
 const JNI_FALSE = convert(Cchar, 0)
@@ -155,7 +158,7 @@ function init_new_vm(libpath,opts)
     # `opt` holds raw pointers into each string in `opts`, but does not keep
     # those strings rooted on its own.
     GC.@preserve opt opts begin
-        vm_args = JavaVMInitArgs(JNI_VERSION_1_8, convert(Cint, length(opts)),
+        vm_args = JavaVMInitArgs(JNI_VERSION_21, convert(Cint, length(opts)),
                                  convert(Ptr{JavaVMOption}, pointer(opt)), JNI_TRUE)
         res = ccall(create, Cint, (Ptr{Ptr{JavaVM}}, Ptr{Ptr{JNIEnv}}, Ptr{JavaVMInitArgs}), ppjvm, ppenv,
                     Ref(vm_args))

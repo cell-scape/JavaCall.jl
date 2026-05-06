@@ -50,7 +50,7 @@ Hello World
 
 ## Julia version compatibility
 
-The CI tests for Julia 1.6 as `min`, Julia LTS, and the latest stable release.
+JavaCall.jl 0.9 requires Julia 1.12 or newer. CI tests Julia 1.12 (`min`), Julia LTS, and the latest stable release. For older Julia versions, use JavaCall.jl 0.8.x.
 
 ## macOS and Linux
 
