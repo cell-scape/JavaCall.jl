@@ -493,17 +493,21 @@ cleanup_arg(arg::JavaObject) = deleteref(arg)
 global const _jmc_cache = [ Dict{Symbol, JavaMetaClass}() ]
 
 function _metaclass(class::Symbol)
-    jclass=javaclassname(class)
+    jclass = javaclassname(class)
     jclassptr = @checknull JNI.FindClass(jclass)
-    return JavaMetaClass(class, jclassptr)
+    # FindClass returns a local ref; promote to a global ref so the cache
+    # entry survives PopLocalFrame and outlives the caller's frame.
+    globalptr = JNI.NewGlobalRef(jclassptr)
+    JNI.DeleteLocalRef(jclassptr)
+    return JavaMetaClass{class}(JavaGlobalRef(globalptr))
 end
 
 function metaclass(class::Symbol)
-    return _metaclass(class)
-    if !haskey(_jmc_cache[ Threads.threadid() ], class)
-        _jmc_cache[ Threads.threadid() ][class] = _metaclass(class)
+    cache = _jmc_cache[ Threads.threadid() ]
+    if !haskey(cache, class)
+        cache[class] = _metaclass(class)
     end
-    return _jmc_cache[ Threads.threadid() ][class]
+    return cache[class]
 end
 
 metaclass(::Type{JavaObject{T}}) where {T} = metaclass(T)

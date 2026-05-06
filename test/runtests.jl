@@ -409,6 +409,24 @@ end
     end
 end
 
+@testset "metaclass_cache" begin
+    # Repeated lookups must hit the cache, not re-issue FindClass.
+    sym = Symbol("java.lang.String")
+    mc1 = JavaCall.metaclass(sym)
+    mc2 = JavaCall.metaclass(sym)
+    @test mc1 === mc2
+    @test Ptr(mc1) == Ptr(mc2)
+    @test Ptr(mc1) != C_NULL
+
+    # Cached entry must be a JNI global ref so it survives PopLocalFrame.
+    @test JavaCall.JNI.GetObjectRefType(Ptr(mc1)) == JavaCall.JNI.JNIGlobalRefType
+    jlocalframe(Nothing) do
+        nothing
+    end
+    @test Ptr(JavaCall.metaclass(sym)) == Ptr(mc1)
+    @test JavaCall.JNI.GetObjectRefType(Ptr(mc1)) == JavaCall.JNI.JNIGlobalRefType
+end
+
 @testset "jlocalframe" begin
     @test jlocalframe() do
         JObject()
