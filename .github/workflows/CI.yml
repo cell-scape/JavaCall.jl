@@ -41,6 +41,10 @@ jobs:
             os: macos-15-intel
             arch: x64
             threads: '4'
+          - version: '1'
+            os: macos-15-intel
+            arch: x64
+            threads: '1'
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-java@v5
