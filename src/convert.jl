@@ -25,24 +25,29 @@ convert(o::Type{JavaObject{T}}, ::Nothing) where T = o(J_NULL)
 
 #Cast java object from S to T . Needed for polymorphic calls
 function convert(::Type{JavaObject{T}}, obj::JavaObject{S}) where {T,S}
-    if isConvertible(T, S)   #Safe static cast
-        ptr = JNI.NewLocalRef(Ptr(obj))
-        ptr === C_NULL && geterror()
-        return JavaObject{T}(ptr)
+    with_env() do env
+        if isConvertible(env, T, S)   #Safe static cast
+            ptr = JNI.NewLocalRef(Ptr(obj), env)
+            ptr === C_NULL && geterror(env)
+            return JavaObject{T}(ptr)
+        end
+        isnull(obj) && throw(ArgumentError("Cannot convert NULL"))
+        realClass = JNI.GetObjectClass(Ptr(obj), env)
+        if isConvertible(env, T, realClass)  #dynamic cast
+            ptr = JNI.NewLocalRef(Ptr(obj), env)
+            ptr === C_NULL && geterror(env)
+            return JavaObject{T}(ptr)
+        end
+        throw(JavaCallError("Cannot cast java object from $S to $T"))
     end
-    isnull(obj) && throw(ArgumentError("Cannot convert NULL"))
-    realClass = JNI.GetObjectClass(Ptr(obj))
-    if isConvertible(T, realClass)  #dynamic cast
-        ptr = JNI.NewLocalRef(Ptr(obj))
-        ptr === C_NULL && geterror()
-        return JavaObject{T}(ptr)
-    end
-    throw(JavaCallError("Cannot cast java object from $S to $T"))
 end
 
 #Is java type convertible from S to T.
-isConvertible(T, S) = JNI.IsAssignableFrom(Ptr(metaclass(S)), Ptr(metaclass(T))) == JNI_TRUE
-isConvertible(T, S::Ptr{Nothing} ) = JNI.IsAssignableFrom(S, Ptr(metaclass(T))) == JNI_TRUE
+isConvertible(env::Ptr{JNI.JNIEnv}, T, S) = JNI.IsAssignableFrom(Ptr(metaclass(env, S)), Ptr(metaclass(env, T)), env) == JNI_TRUE
+isConvertible(env::Ptr{JNI.JNIEnv}, T, S::Ptr{Nothing}) = JNI.IsAssignableFrom(S, Ptr(metaclass(env, T)), env) == JNI_TRUE
+# Backwards-compat forms: obtain env on demand
+isConvertible(T, S) = with_env() do env; isConvertible(env, T, S); end
+isConvertible(T, S::Ptr{Nothing}) = with_env() do env; isConvertible(env, T, S); end
 
 unsafe_convert(::Type{Ptr{Nothing}}, cls::JavaMetaClass) = Ptr(cls)
 unsafe_convert(::Type{Ptr{Nothing}}, obj::JavaObject) = Ptr(obj)
@@ -58,13 +63,13 @@ function real_jtype(rettype)
     return jnitype
 end
 
-function convert_args(argtypes::Tuple, args...)
+function convert_args(env::Ptr{JNI.JNIEnv}, argtypes::Tuple, args...)
     # Previously we converted to jvalue here
     # Instead convert to jvalue in _jcall so that we can delete local refs
     convertedArgs = Array{Any}(undef, length(args))
     savedArgs = Array{Any}(undef, length(args))
     for i in 1:length(args)
-        r = convert_arg(argtypes[i], args[i])
+        r = convert_arg(env, argtypes[i], args[i])
         savedArgs[i] = r[1]
         convertedArgs[i] = r[2]
     end
@@ -72,18 +77,25 @@ function convert_args(argtypes::Tuple, args...)
 end
 
 # We may be able to consolidate these convert_arg functions
-function convert_arg(argtype::Type{JString}, arg)
+function convert_arg(env::Ptr{JNI.JNIEnv}, argtype::Type{JString}, arg::JString)
+    return arg, arg
+end
+function convert_arg(env::Ptr{JNI.JNIEnv}, argtype::Type{JString}, arg::AbstractString)
+    x = JString(env, String(arg))
+    return x, x
+end
+function convert_arg(env::Ptr{JNI.JNIEnv}, argtype::Type{JString}, arg)
     x = convert(JString, arg)
-    return x,x
+    return x, x
 end
 
-function convert_arg(argtype::Type, arg)
+function convert_arg(env::Ptr{JNI.JNIEnv}, argtype::Type, arg)
     x = convert(argtype, arg)
-    return x,x
+    return x, x
 end
-function convert_arg(argtype::Type{T}, arg) where T<:JavaObject
+function convert_arg(env::Ptr{JNI.JNIEnv}, argtype::Type{T}, arg) where T<:JavaObject
     x = convert(T, arg)::T
-    return x,x
+    return x, x
 end
 
 for (x, y, z) in [(:jboolean, :(JNI.NewBooleanArray), :(JNI.SetBooleanArrayRegion)),
@@ -95,12 +107,12 @@ for (x, y, z) in [(:jboolean, :(JNI.NewBooleanArray), :(JNI.SetBooleanArrayRegio
                   (:jfloat,   :(JNI.NewFloatArray),   :(JNI.SetFloatArrayRegion))  ,
                   (:jdouble,  :(JNI.NewDoubleArray),  :(JNI.SetDoubleArrayRegion)) ]
     m = quote
-        function convert_arg(argtype::Type{Array{$x,1}}, arg)
+        function convert_arg(env::Ptr{JNI.JNIEnv}, argtype::Type{Array{$x,1}}, arg)
             carg = convert(argtype, arg)
             sz=length(carg)
-            arrayptr = $y(sz)
-            arrayptr === C_NULL && geterror()
-            $z(arrayptr, 0, sz, carg)
+            arrayptr = $y(sz, env)
+            arrayptr === C_NULL && geterror(env)
+            $z(arrayptr, 0, sz, carg, env)
             # Wrap into JavaObjects so we can delete the local refs
             return carg, JavaObject{argtype}(arrayptr)
         end
@@ -108,21 +120,21 @@ for (x, y, z) in [(:jboolean, :(JNI.NewBooleanArray), :(JNI.SetBooleanArrayRegio
     eval( m)
 end
 
-function convert_arg(argtype::Type{Array{T,1}}, arg) where T<:JavaObject
+function convert_arg(env::Ptr{JNI.JNIEnv}, argtype::Type{Array{T,1}}, arg) where T<:JavaObject
     carg = convert(argtype, arg)
     sz = length(carg)
-    init = sz == 0 ? C_NULL : Ptr(carg[1]) 
-    arrayptr = JNI.NewObjectArray(sz, Ptr(metaclass(T)), init)
-    arrayptr === C_NULL && geterror()
+    init = sz == 0 ? C_NULL : Ptr(carg[1])
+    arrayptr = JNI.NewObjectArray(sz, Ptr(metaclass(env, T)), init, env)
+    arrayptr === C_NULL && geterror(env)
     for i=2:sz
-        JNI.SetObjectArrayElement(arrayptr, i-1, Ptr(carg[i]))
+        JNI.SetObjectArrayElement(arrayptr, i-1, Ptr(carg[i]), env)
     end
     return carg, JavaObject{argtype}(arrayptr)
 end
 
-convert_result(rettype::Type{T}, result) where {T<:JString} = unsafe_string(JString(result))
-convert_result(rettype::Type{T}, result) where {T<:JavaObject} = T(result)
-convert_result(rettype, result) = result
+convert_result(env::Ptr{JNI.JNIEnv}, rettype::Type{T}, result) where {T<:JString} = unsafe_string(env, result)
+convert_result(env::Ptr{JNI.JNIEnv}, rettype::Type{T}, result) where {T<:JavaObject} = T(result)
+convert_result(env::Ptr{JNI.JNIEnv}, rettype, result) = result
 
 for (x, y, z) in [(:jboolean, :(JNI.GetBooleanArrayElements), :(JNI.ReleaseBooleanArrayElements)),
                   (:jchar,    :(JNI.GetCharArrayElements),    :(JNI.ReleaseCharArrayElements))   ,
@@ -133,92 +145,92 @@ for (x, y, z) in [(:jboolean, :(JNI.GetBooleanArrayElements), :(JNI.ReleaseBoole
                   (:jfloat,   :(JNI.GetFloatArrayElements),   :(JNI.ReleaseFloatArrayElements))  ,
                   (:jdouble,  :(JNI.GetDoubleArrayElements),  :(JNI.ReleaseDoubleArrayElements)) ]
     m = quote
-        function convert_result(rettype::Type{Array{$(x),1}}, result)
-            sz = JNI.GetArrayLength(result)
-            arr = $y(result, Ptr{jboolean}(C_NULL))
+        function convert_result(env::Ptr{JNI.JNIEnv}, rettype::Type{Array{$(x),1}}, result)
+            sz = JNI.GetArrayLength(result, env)
+            arr = $y(result, Ptr{jboolean}(C_NULL), env)
             jl_arr::Array = unsafe_wrap(Array, arr, Int(sz))
             jl_arr = deepcopy(jl_arr)
-            $z(result, arr, Int32(0))
-            JNI.DeleteLocalRef(result)
+            $z(result, arr, Int32(0), env)
+            JNI.DeleteLocalRef(result, env)
             return jl_arr
         end
     end
     eval(m)
 end
 
-function convert_result(rettype::Type{Array{JavaObject{T},1}}, result) where T
-    sz = JNI.GetArrayLength(result)
+function convert_result(env::Ptr{JNI.JNIEnv}, rettype::Type{Array{JavaObject{T},1}}, result) where T
+    sz = JNI.GetArrayLength(result, env)
 
     ret = Array{JavaObject{T}}(undef, sz)
 
     for i=1:sz
-        a=JNI.GetObjectArrayElement(result, i-1)
+        a=JNI.GetObjectArrayElement(result, i-1, env)
         ret[i] = JavaObject{T}(a)
     end
-    
-    JNI.DeleteLocalRef(result)
+
+    JNI.DeleteLocalRef(result, env)
     return ret
 end
 
 
 # covers return types like Vector{Vector{T}}
-function convert_result(rettype::Type{Array{T,1}}, result) where T
-    sz = JNI.GetArrayLength(result)
+function convert_result(env::Ptr{JNI.JNIEnv}, rettype::Type{Array{T,1}}, result) where T
+    sz = JNI.GetArrayLength(result, env)
 
     ret = Array{T}(undef, sz)
 
     for i=1:sz
-        a=JNI.GetObjectArrayElement(result, i-1)
-        ret[i] = convert_result(T, a)
+        a=JNI.GetObjectArrayElement(result, i-1, env)
+        ret[i] = convert_result(env, T, a)
     end
 
-    JNI.DeleteLocalRef(result)
+    JNI.DeleteLocalRef(result, env)
     return ret
 end
 
 
-function convert_result(rettype::Type{Array{JavaObject{T},2}}, result) where T
-    sz = JNI.GetArrayLength(result)
+function convert_result(env::Ptr{JNI.JNIEnv}, rettype::Type{Array{JavaObject{T},2}}, result) where T
+    sz = JNI.GetArrayLength(result, env)
     if sz == 0
         return Array{T}(undef, 0,0)
     end
-    a_1 = JNI.GetObjectArrayElement(result, 0)
-    sz_1 = JNI.GetArrayLength(a_1)
+    a_1 = JNI.GetObjectArrayElement(result, 0, env)
+    sz_1 = JNI.GetArrayLength(a_1, env)
     ret = Array{JavaObject{T}}(undef, sz, sz_1)
     for i=1:sz
-        a = JNI.GetObjectArrayElement(result, i-1)
+        a = JNI.GetObjectArrayElement(result, i-1, env)
         # check that size of the current subarray is the same as for the first one
-        sz_a = JNI.GetArrayLength(a)
+        sz_a = JNI.GetArrayLength(a, env)
         @assert(sz_a == sz_1, "Size of $(i)th subrarray is $sz_a, but size of the 1st subarray was $sz_1")
         for j=1:sz_1
-            x = JNI.GetObjectArrayElement(a, j-1)
+            x = JNI.GetObjectArrayElement(a, j-1, env)
             ret[i, j] = JavaObject{T}(x)
         end
     end
 
-    JNI.DeleteLocalRef(result)
+    JNI.DeleteLocalRef(result, env)
     return ret
 end
 
 
 # matrices of primitive types and other arrays
-function convert_result(rettype::Type{Array{T,2}}, result) where T
-    sz = JNI.GetArrayLength(result)
+function convert_result(env::Ptr{JNI.JNIEnv}, rettype::Type{Array{T,2}}, result) where T
+    sz = JNI.GetArrayLength(result, env)
     if sz == 0
         return Array{T}(undef, 0,0)
     end
-    a_1 = JNI.GetObjectArrayElement(result, 0)
-    sz_1 = JNI.GetArrayLength(a_1)
+    a_1 = JNI.GetObjectArrayElement(result, 0, env)
+    sz_1 = JNI.GetArrayLength(a_1, env)
     ret = Array{T}(undef, sz, sz_1)
     for i=1:sz
-        a = JNI.GetObjectArrayElement(result, i-1)
+        a = JNI.GetObjectArrayElement(result, i-1, env)
         # check that size of the current subarray is the same as for the first one
-        sz_a = JNI.GetArrayLength(a)
+        sz_a = JNI.GetArrayLength(a, env)
         @assert(sz_a == sz_1, "Size of $(i)th subrarray is $sz_a, but size of the 1st subarray was $sz_1")
-        ret[i, :] = convert_result(Vector{T}, a)
+        ret[i, :] = convert_result(env, Vector{T}, a)
     end
 
-    JNI.DeleteLocalRef(result)
+    JNI.DeleteLocalRef(result, env)
     return ret
 end
 
@@ -288,15 +300,22 @@ function convert(::Type{@jimport(java.util.List)}, x::Vector, V::Type{JavaObject
 end
 
 # Convert a reference to a java.lang.String into a Julia string. Copies the underlying byte buffer
-unsafe_string(jstr::JString) = unsafe_string(Ptr(jstr))  #jstr must be a jstring obtained via a JNI call
+unsafe_string(jstr::JString) = with_env() do env
+    unsafe_string(env, Ptr(jstr))
+end
 
-function unsafe_string(jstr::Ptr{Nothing})  #jstr must be a jstring obtained via a JNI call
-    if jstr == C_NULL; return ""; end #Return empty string to keep type stability. But this is questionable
+unsafe_string(env::Ptr{JNI.JNIEnv}, jstr::JString) = unsafe_string(env, Ptr(jstr))
+
+unsafe_string(jstr::Ptr{Nothing}) = with_env() do env
+    unsafe_string(env, jstr)
+end
+
+function unsafe_string(env::Ptr{JNI.JNIEnv}, jstr::Ptr{Nothing})  #jstr must be a jstring obtained via a JNI call
+    jstr == C_NULL && return "" #Return empty string to keep type stability. But this is questionable
     pIsCopy = Array{jboolean}(undef, 1)
-    #buf::Ptr{UInt8} = JNI.GetStringUTFChars(Ptr(jstr), pIsCopy)
-    buf = JNI.GetStringUTFChars(jstr, pIsCopy)
+    buf = JNI.GetStringUTFChars(jstr, pIsCopy, env)
     s = unsafe_string(buf)
-    JNI.ReleaseStringUTFChars(jstr, buf)
+    JNI.ReleaseStringUTFChars(jstr, buf, env)
     return s
 end
 
@@ -310,12 +329,14 @@ for (x, y, z) in [(:jboolean, :(JNI.GetBooleanArrayElements), :(JNI.ReleaseBoole
                   (:jdouble,  :(JNI.GetDoubleArrayElements),  :(JNI.ReleaseDoubleArrayElements)) ]
     m = quote
         function convert(::Type{Array{$(x),1}}, obj::JObject)
-            sz = JNI.GetArrayLength(Ptr(obj))
-            arr = $y(Ptr(obj), Ptr{jboolean}(C_NULL))
-            jl_arr::Array = unsafe_wrap(Array, arr, Int(sz))
-            jl_arr = deepcopy(jl_arr)
-            $z(Ptr(obj), arr, Int32(0))
-            return jl_arr
+            with_env() do env
+                sz = JNI.GetArrayLength(Ptr(obj), env)
+                arr = $y(Ptr(obj), Ptr{jboolean}(C_NULL), env)
+                jl_arr::Array = unsafe_wrap(Array, arr, Int(sz))
+                jl_arr = deepcopy(jl_arr)
+                $z(Ptr(obj), arr, Int32(0), env)
+                return jl_arr
+            end
         end
     end
     eval(m)
@@ -323,13 +344,15 @@ end
 
 
 function convert(::Type{Array{T, 1}}, obj::JObject) where T
-    sz = JNI.GetArrayLength(Ptr(obj))
-    ret = Array{T}(undef, sz)
-    for i=1:sz
-        ptr = JNI.GetObjectArrayElement(Ptr(obj), i-1)
-        ret[i] = convert(T, JObject(ptr))
+    with_env() do env
+        sz = JNI.GetArrayLength(Ptr(obj), env)
+        ret = Array{T}(undef, sz)
+        for i=1:sz
+            ptr = JNI.GetObjectArrayElement(Ptr(obj), i-1, env)
+            ret[i] = convert(T, JObject(ptr))
+        end
+        return ret
     end
-    return ret
 end
 
 ##Iterator

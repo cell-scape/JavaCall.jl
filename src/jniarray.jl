@@ -49,12 +49,16 @@ for primitive in [:jboolean, :jchar, :jbyte, :jshort, :jint, :jlong, :jfloat, :j
     new_array = :(JNI.$(Symbol("New$(name)Array")))
     m = quote
         function get_elements!(jarr::JNIVector{$primitive})
-            sz = Int(JNI.GetArrayLength(jarr.ref.ptr))
-            # Free the array in release_elements rather than directly via GC
-            jarr.arr = unsafe_wrap(Array, $get_elements(jarr.ref.ptr, Ptr{jboolean}(C_NULL)), sz; own = false)
+            with_env() do env
+                sz = Int(JNI.GetArrayLength(jarr.ref.ptr, env))
+                # Free the array in release_elements rather than directly via GC
+                jarr.arr = unsafe_wrap(Array, $get_elements(jarr.ref.ptr, Ptr{jboolean}(C_NULL), env), sz; own = false)
+            end
             jarr
         end
-        JNIVector{$primitive}(sz::Int) = get_elements!(JNIVector{$primitive}($new_array(sz)))
+        JNIVector{$primitive}(sz::Int) = with_env() do env
+            get_elements!(JNIVector{$primitive}($new_array(sz, env)))
+        end
         function release_elements(arg::JNIVector{$primitive})
             # Idempotent: if already released, do nothing. Both convert_arg
             # (which calls release_elements before re-passing the JNIVector
@@ -66,21 +70,23 @@ for primitive in [:jboolean, :jchar, :jbyte, :jshort, :jint, :jlong, :jfloat, :j
             if JNI.ppenv[1] != C_NULL
                 arr = arg.arr
                 ref = arg.ref
-                # The correct way would be let ccall handle this by removing typing from JNI wrappers
-                GC.@preserve arg ref arr begin
-                    $release_elements(ref.ptr, pointer(arr), jint(0))
+                with_env() do env
+                    # The correct way would be let ccall handle this by removing typing from JNI wrappers
+                    GC.@preserve arg ref arr begin
+                        $release_elements(ref.ptr, pointer(arr), jint(0), env)
+                    end
                 end
             end
             arg.arr = nothing
         end
-        function convert_result(::Type{JNIVector{$primitive}}, ptr)
+        function convert_result(env::Ptr{JNI.JNIEnv}, ::Type{JNIVector{$primitive}}, ptr)
             get_elements!(JNIVector{$primitive}(ptr))
         end
-        function convert_arg(argtype::Type{Vector{$primitive}}, arg::JNIVector{$primitive})
+        function convert_arg(env::Ptr{JNI.JNIEnv}, argtype::Type{Vector{$primitive}}, arg::JNIVector{$primitive})
             release_elements(arg)
             return arg, arg
         end
-        function convert_arg(argtype::Type{JNIVector{$primitive}}, arg::JNIVector{$primitive})
+        function convert_arg(env::Ptr{JNI.JNIEnv}, argtype::Type{JNIVector{$primitive}}, arg::JNIVector{$primitive})
             release_elements(arg)
             return arg, arg
         end

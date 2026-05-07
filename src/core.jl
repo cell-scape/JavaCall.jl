@@ -46,12 +46,12 @@ const J_NULL = JavaNullRef()
 Ptr(ref::JavaRef) = ref.ptr
 Ptr{Nothing}(ref::JavaRef) = ref.ptr
 
-JavaLocalRef(ref::JavaRef) = JavaLocalRef(JNI.NewLocalRef(Ptr(ref)))
-JavaGlobalRef(ref::JavaRef) = JavaGlobalRef(JNI.NewGlobalRef(Ptr(ref)))
+JavaLocalRef(ref::JavaRef) = with_env() do env; JavaLocalRef(JNI.NewLocalRef(Ptr(ref), env)); end
+JavaGlobalRef(ref::JavaRef) = with_env() do env; JavaGlobalRef(JNI.NewGlobalRef(Ptr(ref), env)); end
 
 # _deleteref does local/global reference deletion without null or state checking
-_deleteref(ref::JavaLocalRef ) = JNI.DeleteLocalRef( Ptr(ref))
-_deleteref(ref::JavaGlobalRef) = JNI.DeleteGlobalRef(Ptr(ref))
+_deleteref(ref::JavaLocalRef ) = with_env() do env; JNI.DeleteLocalRef( Ptr(ref), env); end
+_deleteref(ref::JavaGlobalRef) = with_env() do env; JNI.DeleteGlobalRef(Ptr(ref), env); end
 _deleteref(ref::JavaNullRef) = nothing
 
 """
@@ -112,62 +112,66 @@ end
     ```
 """
 function jlocalframe(f::Function, returntype::Type = Any; capacity = 16)
-    JNI.PushLocalFrame(jint(capacity))
-    result_ref = C_NULL
-    return_ref = JavaLocalRef(result_ref)
-    result = nothing
-    # Holds a strong reference to the original f() return value so that, if
-    # it is a JavaObject, its finalizer cannot fire (and thus DeleteLocalRef
-    # cannot run) between when we extract its raw pointer and when
-    # PopLocalFrame consumes it below.
-    result_keep = nothing
-    try
-        if returntype == Any
-            result = f()
-        else
-            result = f(returntype)
+    with_env() do env
+        JNI.PushLocalFrame(jint(capacity), env)
+        result_ref = C_NULL
+        return_ref = JavaLocalRef(result_ref)
+        result = nothing
+        # Holds a strong reference to the original f() return value so that, if
+        # it is a JavaObject, its finalizer cannot fire (and thus DeleteLocalRef
+        # cannot run) between when we extract its raw pointer and when
+        # PopLocalFrame consumes it below.
+        result_keep = nothing
+        try
+            if returntype == Any
+                result = f()
+            else
+                result = f(returntype)
+            end
+            result_keep = result
+            if isa(result, JavaObject)
+                result = Ptr{Nothing}(result)
+            end
+            if isa(result, Ptr{Nothing}) &&
+               JNI.GetObjectRefType(result, env) == JNI.JNILocalRefType
+                result_ref = result
+            end
+        catch err
+            rethrow(err)
+        finally
+            GC.@preserve result_keep begin
+                return_ref = JavaLocalRef( JNI.PopLocalFrame(result_ref, env) )
+            end
         end
-        result_keep = result
-        if isa(result, JavaObject)
-            result = Ptr{Nothing}(result)
-        end
-        if isa(result, Ptr{Nothing}) &&
-           JNI.GetObjectRefType(result) == JNI.JNILocalRefType
-            result_ref = result
-        end
-    catch err
-        rethrow(err)
-    finally
-        GC.@preserve result_keep begin
-            return_ref = JavaLocalRef( JNI.PopLocalFrame(result_ref) )
-        end
-    end
 
-    # Return
-    if returntype == Any # Not Type Stable
-        if !isnull(return_ref.ptr)
-            return narrow( JObject(return_ref) )
+        # Return
+        if returntype == Any # Not Type Stable
+            if !isnull(return_ref.ptr)
+                return narrow( JObject(return_ref) )
+            else
+                return result
+            end
+        elseif returntype <: JavaObject
+            return returntype(return_ref)
         else
-            return result
+            return result::returntype
         end
-    elseif returntype <: JavaObject
-        return returntype(return_ref)
-    else
-        return result::returntype
     end
 end
 
 # Closer to https://github.com/ahnlabb/BioformatsLoader.jl/commit/4d4e2d5decd87c8bfd2bfca2fdfbc4214b120977
 function jlocalframe(f::Function, returntype::Type{Nothing}; capacity = 16)
-    JNI.PushLocalFrame(jint(capacity))
-    try
-        f()
-    catch err
-        rethrow(err)
-    finally
-        JNI.PopLocalFrame(C_NULL)
+    with_env() do env
+        JNI.PushLocalFrame(jint(capacity), env)
+        try
+            f()
+        catch err
+            rethrow(err)
+        finally
+            JNI.PopLocalFrame(C_NULL, env)
+        end
+        return nothing
     end
-    return nothing
 end
 
 """
@@ -228,9 +232,11 @@ Ptr{Nothing}(x::JavaObject{T}) where T = Ptr(x.ref)
    jglobal(x::JavaObject) creates a new JavaGlobalRef and deletes the prior JavaRef
 """
 function jglobal(x::JavaObject)
-    gref = JavaGlobalRef(JNI.NewGlobalRef(Ptr(x)))
-    deleteref(x.ref)
-    x.ref = gref
+    with_env() do env
+        gref = JavaGlobalRef(JNI.NewGlobalRef(Ptr(x), env))
+        deleteref(x.ref)
+        x.ref = gref
+    end
 end
 
 """
@@ -306,7 +312,13 @@ const JString = JavaObject{Symbol("java.lang.String")}
 #JavaObject(ptr::Ptr{Nothing}) = ptr == C_NULL ? JavaObject(ptr) : JavaObject{Symbol(getclassname(getclass(ptr)))}(ptr)
 
 function JString(str::AbstractString)
-    jstring = @checknull JNI.NewStringUTF(String(str))
+    with_env() do env
+        JString(env, str)
+    end
+end
+
+function JString(env::Ptr{JNI.JNIEnv}, str::AbstractString)
+    jstring = @checknull JNI.NewStringUTF(String(str), env)
     return JString(jstring)
 end
 
@@ -374,10 +386,12 @@ isprimitive(juliaclass::JClass) = jcall(juliaclass, "isPrimitive", jboolean, ())
 isarray(juliaclass::JClass) = jcall(juliaclass, "isArray", jboolean, ()) == 0x01
 isarray(juliaclass::String) = endswith(juliaclass, "[]")
 
-function jnew(T::Symbol, argtypes::Tuple = () , args...)
-    assertroottask_or_goodenv() && assertloaded()
-    jmethodId = get_method_id(JNI.GetMethodID, T, "<init>", Nothing, argtypes)
-    return _jcall(metaclass(T), jmethodId, JavaObject{T}, argtypes, args...; callmethod=JNI.NewObjectA)
+function jnew(T::Symbol, argtypes::Tuple = (), args...)
+    assertloaded()
+    with_env() do env
+        jmethodId = _cached_method_id(env, T, "<init>", Nothing, argtypes, false)
+        _jcall(env, metaclass(env, T), jmethodId, JavaObject{T}, argtypes, args...; callmethod=JNI.NewObjectA)
+    end
 end
 
 _jcallable(typ::Type{JavaObject{T}}) where T = metaclass(T)
@@ -387,34 +401,32 @@ function _jcallable(obj::JavaObject)
 end
 
 function jcall(ref, method::AbstractString, rettype::Type, argtypes::Tuple = (), args...)
-    assertroottask_or_goodenv() && assertloaded()
-    jmethodId = get_method_id(ref, method, rettype, argtypes)
-    _jcall(_jcallable(ref), jmethodId, rettype, argtypes, args...)
+    assertloaded()
+    with_env() do env
+        jmethodId = get_method_id(env, ref, method, rettype, argtypes)
+        _jcall(env, _jcallable(ref), jmethodId, rettype, argtypes, args...)
+    end
 end
 
 function jcall(ref, method::JMethod, args...)
-    assertroottask_or_goodenv() && assertloaded()
-    jmethodId = get_method_id(method)
-    rettype = jimport(getreturntype(method))
-    argtypes = Tuple(jimport.(getparametertypes(method)))
-    _jcall(_jcallable(ref), jmethodId, rettype, argtypes, args...)
+    assertloaded()
+    with_env() do env
+        jmethodId = get_method_id(env, method)
+        rettype = jimport(getreturntype(method))
+        argtypes = Tuple(jimport.(getparametertypes(method)))
+        _jcall(env, _jcallable(ref), jmethodId, rettype, argtypes, args...)
+    end
 end
 
-function get_method_id(jnifun::Function, obj, method::AbstractString, rettype::Type, argtypes::Tuple)
-    sig = method_signature(rettype, argtypes...)
-    ptr = Ptr(metaclass(obj))
-    @checknull jnifun(ptr, String(method), sig) "Problem getting method id for $obj.$method with signature $sig"
+function get_method_id(env::Ptr{JNI.JNIEnv}, typ::Type{JavaObject{T}}, method::AbstractString, rettype::Type, argtypes::Tuple) where T
+    _cached_method_id(env, T, method, rettype, argtypes, true)
 end
 
-function get_method_id(typ::Type{JavaObject{T}}, method::AbstractString, rettype::Type, argtypes::Tuple) where T
-    get_method_id(JNI.GetStaticMethodID, T, method, rettype, argtypes)
+function get_method_id(env::Ptr{JNI.JNIEnv}, obj::JavaObject{T}, method::AbstractString, rettype::Type, argtypes::Tuple) where T
+    _cached_method_id(env, T, method, rettype, argtypes, false)
 end
 
-function get_method_id(obj::JavaObject, method::AbstractString, rettype::Type, argtypes::Tuple)
-    get_method_id(JNI.GetMethodID, obj, method, rettype, argtypes)
-end
-
-get_method_id(method::JMethod) = @checknull JNI.FromReflectedMethod(method)
+get_method_id(env::Ptr{JNI.JNIEnv}, method::JMethod) = @checknull JNI.FromReflectedMethod(Ptr(method), env)
 
 # JMethod invoke
 (m::JMethod)(obj, args...) = jcall(obj, m, args...)
@@ -429,43 +441,56 @@ Get a pointer to a field of of a Java class or object.
 * `fieldType` is a Type
 """
 function jfield(ref, field, fieldType)
-    assertroottask_or_goodenv() && assertloaded()
-    jfieldID = get_field_id(ref, field, fieldType)
-    _jfield(_jcallable(ref), jfieldID, fieldType)
+    assertloaded()
+    with_env() do env
+        jfieldID = get_field_id(env, ref, field, fieldType)
+        _jfield(env, _jcallable(ref), jfieldID, fieldType)
+    end
 end
 
 function jfield(ref, field)
-    assertroottask_or_goodenv() && assertloaded()
-    fieldType = jimport(gettype(field))
-    jfieldID = get_field_id(ref, field, fieldType)
-    _jfield(_jcallable(ref), jfieldID, fieldType)
+    assertloaded()
+    with_env() do env
+        fieldType = jimport(gettype(field))
+        jfieldID = get_field_id(env, ref, field, fieldType)
+        _jfield(env, _jcallable(ref), jfieldID, fieldType)
+    end
 end
 
 function jfield(ref, field::AbstractString)
-    assertroottask_or_goodenv() && assertloaded()
-    field = listfields(ref, field)[]
-    fieldType = jimport(gettype(field))
-    jfieldID = get_field_id(ref, field)
-    _jfield(_jcallable(ref), jfieldID, fieldType)
+    assertloaded()
+    with_env() do env
+        field = listfields(ref, field)[]
+        fieldType = jimport(gettype(field))
+        jfieldID = get_field_id(env, ref, field)
+        _jfield(env, _jcallable(ref), jfieldID, fieldType)
+    end
 end
 
 jfield(ref, field::Symbol) = jfield(ref, String(field))
 
-function get_field_id(typ::Type{JavaObject{T}}, field::AbstractString, fieldType::Type) where T
-    @checknull JNI.GetStaticFieldID(Ptr(metaclass(T)), String(field), signature(fieldType))
+function get_field_id(env::Ptr{JNI.JNIEnv}, typ::Type{JavaObject{T}}, field::AbstractString, fieldType::Type) where T
+    @checknull JNI.GetStaticFieldID(Ptr(metaclass(env, T)), String(field), signature(fieldType), env)
 end
 
-function get_field_id(obj::Type{JavaObject{T}}, field::JField) where T
-    fieldType = jimport(gettype(field))
-    @checknull JNI.FromReflectedField(field)
+function get_field_id(env::Ptr{JNI.JNIEnv}, obj::Type{JavaObject{T}}, field::JField) where T
+    @checknull JNI.FromReflectedField(field, env)
 end
 
-function get_field_id(obj::JavaObject, field::AbstractString, fieldType::Type)
-    @checknull JNI.GetFieldID(Ptr(metaclass(obj)), String(field), signature(fieldType))
+function get_field_id(env::Ptr{JNI.JNIEnv}, obj::Type{JavaObject{T}}, field::JField, fieldType::Type) where T
+    @checknull JNI.FromReflectedField(field, env)
 end
 
-function get_field_id(obj::JavaObject, field::JField, fieldType::Type)
-    @checknull JNI.FromReflectedField(field)
+function get_field_id(env::Ptr{JNI.JNIEnv}, obj::JavaObject, field::AbstractString, fieldType::Type)
+    @checknull JNI.GetFieldID(Ptr(metaclass(env, obj)), String(field), signature(fieldType), env)
+end
+
+function get_field_id(env::Ptr{JNI.JNIEnv}, obj::JavaObject, field::JField, fieldType::Type)
+    @checknull JNI.FromReflectedField(field, env)
+end
+
+function get_field_id(env::Ptr{JNI.JNIEnv}, obj::JavaObject, field::JField)
+    @checknull JNI.FromReflectedField(field, env)
 end
 
 # JField invoke
@@ -488,20 +513,20 @@ for (x, name) in [(:(<:Any),  :Object),
         callmethod = :(JNI.$(Symbol(callprefix, name, :MethodA)))
         fieldmethod = :(JNI.$(Symbol(getprefix, name, :Field)))
         m = quote
-            function _jfield(obj::T, jfieldID::Ptr{Nothing}, fieldType::Type{$x}) where T <: $t
-                result = $fieldmethod(Ptr(obj), jfieldID)
-                geterror()
-                return convert_result(fieldType, result)
+            function _jfield(env::Ptr{JNI.JNIEnv}, obj::T, jfieldID::Ptr{Nothing}, fieldType::Type{$x}) where T <: $t
+                result = $fieldmethod(Ptr(obj), jfieldID, env)
+                geterror(env)
+                return convert_result(env, fieldType, result)
             end
-            function _jcall(obj::T, jmethodId::Ptr{Nothing}, rettype::Type{$x},
+            function _jcall(env::Ptr{JNI.JNIEnv}, obj::T, jmethodId::Ptr{Nothing}, rettype::Type{$x},
                             argtypes::Tuple, args...; callmethod=$callmethod) where T <: $t
-                savedArgs, convertedArgs = convert_args(argtypes, args...)
+                savedArgs, convertedArgs = convert_args(env, argtypes, args...)
                 GC.@preserve obj savedArgs convertedArgs begin
-                    result = callmethod(Ptr(obj), jmethodId, Array{JNI.JValue}(jvalue.(convertedArgs)))
+                    result = callmethod(Ptr(obj), jmethodId, Array{JNI.JValue}(jvalue.(convertedArgs)), env)
                 end
                 cleanup_arg.(convertedArgs)
-                geterror()
-                return convert_result(rettype, result)
+                geterror(env)
+                return convert_result(env, rettype, result)
             end
         end
         eval(m)
@@ -511,26 +536,59 @@ end
 cleanup_arg(arg) = nothing
 cleanup_arg(arg::JavaObject) = deleteref(arg)
 
-global const _jmc_cache = [ Dict{Symbol, JavaMetaClass}() ]
+const _jmc_cache_lock = ReentrantLock()
+const _jmc_cache_v2 = Dict{Symbol, JavaMetaClass}()
 
-function _metaclass(class::Symbol)
+struct MethodKey
+    class::Symbol
+    name::Symbol
+    signature::String
+end
+
+const _method_id_cache = Dict{MethodKey, Ptr{Nothing}}()
+const _method_id_cache_lock = ReentrantLock()
+
+function _cached_method_id(env::Ptr{JNI.JNIEnv}, class_sym::Symbol, name::AbstractString,
+                           rettype::Type, argtypes::Tuple, isstatic::Bool)
+    sig = method_signature(rettype, argtypes...)
+    key = MethodKey(class_sym, Symbol(name), sig)
+    lock(_method_id_cache_lock) do
+        get!(_method_id_cache, key) do
+            mc = metaclass(env, class_sym)
+            jnifun = isstatic ? JNI.GetStaticMethodID : JNI.GetMethodID
+            @checknull jnifun(Ptr(mc), String(name), sig, env) "Problem getting method id for $class_sym.$name $sig"
+        end
+    end
+end
+
+function _metaclass(env::Ptr{JNI.JNIEnv}, class::Symbol)
     jclass = javaclassname(class)
-    jclassptr = @checknull JNI.FindClass(jclass)
+    jclassptr = @checknull JNI.FindClass(jclass, env)
     # FindClass returns a local ref; promote to a global ref so the cache
     # entry survives PopLocalFrame and outlives the caller's frame.
-    globalptr = JNI.NewGlobalRef(jclassptr)
-    JNI.DeleteLocalRef(jclassptr)
+    globalptr = JNI.NewGlobalRef(jclassptr, env)
+    JNI.DeleteLocalRef(jclassptr, env)
     return JavaMetaClass{class}(JavaGlobalRef(globalptr))
 end
 
-function metaclass(class::Symbol)
-    cache = _jmc_cache[ Threads.threadid() ]
-    if !haskey(cache, class)
-        cache[class] = _metaclass(class)
+function metaclass(env::Ptr{JNI.JNIEnv}, class::Symbol)
+    lock(_jmc_cache_lock) do
+        get!(_jmc_cache_v2, class) do
+            _metaclass(env, class)
+        end
     end
-    return cache[class]
 end
 
+# Convenience: fetch env on demand if caller did not pass one.
+metaclass(class::Symbol) = with_env() do env
+    metaclass(env, class)
+end
+
+metaclass(env::Ptr{JNI.JNIEnv}, ::Type{JavaObject{T}}) where {T} = metaclass(env, T)
+metaclass(env::Ptr{JNI.JNIEnv}, ::JavaObject{T}) where {T} = metaclass(env, T)
+metaclass(env::Ptr{JNI.JNIEnv}, ::Type{T}) where T <: AbstractVector = metaclass(env, Symbol(JavaCall.signature(T)))
+
+# Backwards-compat single-arg forms
 metaclass(::Type{JavaObject{T}}) where {T} = metaclass(T)
 metaclass(::JavaObject{T}) where {T} = metaclass(T)
 metaclass(::Type{T}) where T <: AbstractVector = metaclass( Symbol( JavaCall.signature(T) ) )
@@ -543,45 +601,50 @@ function _notnull_assert(ptr)
     isnull(ptr) && throw(JavaCallError("Java Exception thrown, but no details could be retrieved from the JVM"))
 end
 
-function get_exception_string(jthrow)
-    jthrowable = JNI.FindClass("java/lang/Throwable")
+function get_exception_string(env::Ptr{JNI.JNIEnv}, jthrow)
+    jthrowable = JNI.FindClass("java/lang/Throwable", env)
     _notnull_assert(jthrowable)
     res = C_NULL
     try
-        tostring_method = JNI.GetMethodID(jthrowable, "toString", "()Ljava/lang/String;")
+        tostring_method = JNI.GetMethodID(jthrowable, "toString", "()Ljava/lang/String;", env)
         _notnull_assert(tostring_method)
-        res = JNI.CallObjectMethodA(jthrow, tostring_method, Int[])
+        res = JNI.CallObjectMethodA(jthrow, tostring_method, JNI.JValue[], env)
         _notnull_assert(res)
         # Use the Ptr{Nothing} overload of unsafe_string to copy out the
         # UTF-8 chars without wrapping res in a JString JavaObject — that
         # would attach a finalizer racing with the eager DeleteLocalRef
         # below.
-        return unsafe_string(res)
+        return unsafe_string(env, res)
     finally
         # Eagerly free both local refs. A long exception-handling loop
         # would otherwise exhaust the JNI local ref table waiting on
         # Julia GC of the (no longer created) JString wrapper.
-        res != C_NULL && JNI.DeleteLocalRef(res)
-        JNI.DeleteLocalRef(jthrowable)
+        res != C_NULL && JNI.DeleteLocalRef(res, env)
+        JNI.DeleteLocalRef(jthrowable, env)
     end
 end
 
-function geterror()
-    isexception = JNI.ExceptionCheck()
+function geterror(env::Ptr{JNI.JNIEnv})
+    isexception = JNI.ExceptionCheck(env)
 
     if isexception == JNI_TRUE
-        jthrow = JNI.ExceptionOccurred()
+        jthrow = JNI.ExceptionOccurred(env)
         _notnull_assert(jthrow)
         try
-            JNI.ExceptionDescribe() #Print java stackstrace to stdout
+            JNI.ExceptionDescribe(env) #Print java stackstrace to stdout
 
-            msg = get_exception_string(jthrow)
+            msg = get_exception_string(env, jthrow)
             throw(JavaCallError(string("Error calling Java: ", msg)))
         finally
-            JNI.ExceptionClear()
-            JNI.DeleteLocalRef(jthrow)
+            JNI.ExceptionClear(env)
+            JNI.DeleteLocalRef(jthrow, env)
         end
     end
+end
+
+# Backwards-compatible no-arg form
+geterror() = with_env() do env
+    geterror(env)
 end
 
 #get the JNI signature string for a method, given its

@@ -60,7 +60,6 @@ function __init__()
                   "Calling the JVM may result in undefined behavior.")
         end
     end
-    Threads.resize_nthreads!(_jmc_cache)
 end
 
 
