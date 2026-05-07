@@ -310,16 +310,17 @@ function JString(str::AbstractString)
     return JString(jstring)
 end
 
-# jvalue(v::Integer) = int64(v) << (64-8*sizeof(v))
-jvalue(v::Integer)::JNI.jvalue = JNI.jvalue(v)
+# Encode Julia values into a JValue (the C jvalue union). The function
+# name is lowercase `jvalue` to match the C convention; the type name is
+# `JValue` (CamelCase Julia primitive type).
+jvalue(v::Integer)::JNI.JValue = JNI.JValue(Int64(v))
 # Use UInt32 (zero-extension to Int64) rather than Int32 (sign-extension)
 # so the high 4 bytes of the 8-byte jvalue slot are clean. Currently
 # harmless on every Julia-supported architecture (all little-endian, where
-# the JVM reads jfloat from bytes 0-3), but the previous Int32 reinterpret
-# leaked the float's sign bit into bytes 4-7 of the union slot.
-jvalue(v::Float32) = jvalue(reinterpret(UInt32, v))
-jvalue(v::Float64) = jvalue(reinterpret(Int64, v))
-jvalue(v::Ptr) = jvalue(Int(v))
+# the JVM reads jfloat from bytes 0-3).
+jvalue(v::Float32)::JNI.JValue = JNI.JValue(Int64(reinterpret(UInt32, v)))
+jvalue(v::Float64)::JNI.JValue = JNI.JValue(reinterpret(Int64, v))
+jvalue(v::Ptr)::JNI.JValue = JNI.JValue(Int64(UInt(v)))
 jvalue(v::JavaObject) = jvalue(Ptr(v))
 
 
@@ -496,7 +497,7 @@ for (x, name) in [(:(<:Any),  :Object),
                             argtypes::Tuple, args...; callmethod=$callmethod) where T <: $t
                 savedArgs, convertedArgs = convert_args(argtypes, args...)
                 GC.@preserve obj savedArgs convertedArgs begin
-                    result = callmethod(Ptr(obj), jmethodId, Array{JNI.jvalue}(jvalue.(convertedArgs)))
+                    result = callmethod(Ptr(obj), jmethodId, Array{JNI.JValue}(jvalue.(convertedArgs)))
                 end
                 cleanup_arg.(convertedArgs)
                 geterror()

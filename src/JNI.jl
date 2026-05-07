@@ -8,7 +8,7 @@ export JNINativeInterface, JNIEnv, JNIInvokeInterface, JavaVM
 export jint, jlong, jbyte
 # jni.h exports
 export jboolean, jchar, jshort, jfloat, jdouble, jsize, jprimitive
-export jvoid
+export jvoid, JValue
 # constant export
 export JNI_TRUE, JNI_FALSE
 export JNI_VERSION_1_1, JNI_VERSION_1_2, JNI_VERSION_1_4, JNI_VERSION_1_6, JNI_VERSION_1_8
@@ -65,7 +65,24 @@ jlongArray = Ptr{Nothing}
 jfloatArray = Ptr{Nothing}
 jdoubleArray = Ptr{Nothing}
 jcharArray = Ptr{Nothing}
-jvalue = Int64
+"""
+    JValue
+
+JNI's `jvalue` C union as a Julia primitive type. 64 bits wide. Values
+of any JNI primitive (jint, jlong, jfloat, jdouble, jboolean, jbyte,
+jchar, jshort) or a jobject pointer are encoded into a JValue via the
+`jvalue(...)` functions in core.jl, which handle endianness and bit
+placement explicitly. JValue is bit-compatible with Int64 but the
+distinct type catches accidental mixing of Java values and Julia
+integers in ccall signatures.
+"""
+primitive type JValue 64 end
+
+JValue(x::Int64)  = reinterpret(JValue, x)
+JValue(x::UInt64) = reinterpret(JValue, x)
+JValue(x::Ptr)    = reinterpret(JValue, Int64(UInt(x)))
+Base.zero(::Type{JValue}) = reinterpret(JValue, Int64(0))
+Base.convert(::Type{JValue}, x::Integer) = JValue(Int64(x))
 
 @enum jobjectRefType begin
     JNIInvalidRefType    = 0
@@ -308,8 +325,8 @@ EnsureLocalCapacity(capacity::jint, penv=ppenv[ Threads.threadid() ]) =
 AllocObject(clazz::jclass, penv=ppenv[ Threads.threadid() ]) =
   ccall(jniref[].AllocObject, jobject, (Ptr{JNIEnv}, jclass,), penv, clazz)
 
-NewObjectA(clazz::jclass, methodID::jmethodID, args::Array{jvalue,1}, penv=ppenv[ Threads.threadid() ]) =
-  ccall(jniref[].NewObjectA, jobject, (Ptr{JNIEnv}, jclass, jmethodID, Ptr{jvalue},), penv, clazz, methodID, args)
+NewObjectA(clazz::jclass, methodID::jmethodID, args::Array{JValue,1}, penv=ppenv[ Threads.threadid() ]) =
+  ccall(jniref[].NewObjectA, jobject, (Ptr{JNIEnv}, jclass, jmethodID, Ptr{JValue},), penv, clazz, methodID, args)
 
 GetObjectClass(obj::jobject_arg, penv=ppenv[ Threads.threadid() ]) =
   ccall(jniref[].GetObjectClass, jclass, (Ptr{JNIEnv}, jobject,), penv, obj)
@@ -320,65 +337,65 @@ IsInstanceOf(obj::jobject_arg, clazz::jclass, penv=ppenv[ Threads.threadid() ]) 
 GetMethodID(clazz::jclass, name::AnyString, sig::AnyString, penv=ppenv[ Threads.threadid() ]) =
   ccall(jniref[].GetMethodID, jmethodID, (Ptr{JNIEnv}, jclass, Cstring, Cstring,), penv, clazz, name, sig)
 
-CallObjectMethodA(obj::jobject_arg, methodID::jmethodID, args::Array{jvalue,1}, penv=ppenv[ Threads.threadid() ]) =
-  ccall(jniref[].CallObjectMethodA, jobject, (Ptr{JNIEnv}, jobject, jmethodID, Ptr{jvalue},), penv, obj, methodID, args)
+CallObjectMethodA(obj::jobject_arg, methodID::jmethodID, args::Array{JValue,1}, penv=ppenv[ Threads.threadid() ]) =
+  ccall(jniref[].CallObjectMethodA, jobject, (Ptr{JNIEnv}, jobject, jmethodID, Ptr{JValue},), penv, obj, methodID, args)
 
-CallBooleanMethodA(obj::jobject_arg, methodID::jmethodID, args::Array{jvalue,1}, penv=ppenv[ Threads.threadid() ]) =
-  ccall(jniref[].CallBooleanMethodA, jboolean, (Ptr{JNIEnv}, jobject, jmethodID, Ptr{jvalue},), penv, obj, methodID, args)
+CallBooleanMethodA(obj::jobject_arg, methodID::jmethodID, args::Array{JValue,1}, penv=ppenv[ Threads.threadid() ]) =
+  ccall(jniref[].CallBooleanMethodA, jboolean, (Ptr{JNIEnv}, jobject, jmethodID, Ptr{JValue},), penv, obj, methodID, args)
 
-CallByteMethodA(obj::jobject_arg, methodID::jmethodID, args::Array{jvalue,1}, penv=ppenv[ Threads.threadid() ]) =
-  ccall(jniref[].CallByteMethodA, jbyte, (Ptr{JNIEnv}, jobject, jmethodID, Ptr{jvalue},), penv, obj, methodID, args)
+CallByteMethodA(obj::jobject_arg, methodID::jmethodID, args::Array{JValue,1}, penv=ppenv[ Threads.threadid() ]) =
+  ccall(jniref[].CallByteMethodA, jbyte, (Ptr{JNIEnv}, jobject, jmethodID, Ptr{JValue},), penv, obj, methodID, args)
 
-CallCharMethodA(obj::jobject_arg, methodID::jmethodID, args::Array{jvalue,1}, penv=ppenv[ Threads.threadid() ]) =
-  ccall(jniref[].CallCharMethodA, jchar, (Ptr{JNIEnv}, jobject, jmethodID, Ptr{jvalue},), penv, obj, methodID, args)
+CallCharMethodA(obj::jobject_arg, methodID::jmethodID, args::Array{JValue,1}, penv=ppenv[ Threads.threadid() ]) =
+  ccall(jniref[].CallCharMethodA, jchar, (Ptr{JNIEnv}, jobject, jmethodID, Ptr{JValue},), penv, obj, methodID, args)
 
-CallShortMethodA(obj::jobject_arg, methodID::jmethodID, args::Array{jvalue,1}, penv=ppenv[ Threads.threadid() ]) =
-  ccall(jniref[].CallShortMethodA, jshort, (Ptr{JNIEnv}, jobject, jmethodID, Ptr{jvalue},), penv, obj, methodID, args)
+CallShortMethodA(obj::jobject_arg, methodID::jmethodID, args::Array{JValue,1}, penv=ppenv[ Threads.threadid() ]) =
+  ccall(jniref[].CallShortMethodA, jshort, (Ptr{JNIEnv}, jobject, jmethodID, Ptr{JValue},), penv, obj, methodID, args)
 
-CallIntMethodA(obj::jobject_arg, methodID::jmethodID, args::Array{jvalue,1}, penv=ppenv[ Threads.threadid() ]) =
-  ccall(jniref[].CallIntMethodA, jint, (Ptr{JNIEnv}, jobject, jmethodID, Ptr{jvalue},), penv, obj, methodID, args)
+CallIntMethodA(obj::jobject_arg, methodID::jmethodID, args::Array{JValue,1}, penv=ppenv[ Threads.threadid() ]) =
+  ccall(jniref[].CallIntMethodA, jint, (Ptr{JNIEnv}, jobject, jmethodID, Ptr{JValue},), penv, obj, methodID, args)
 
-CallLongMethodA(obj::jobject_arg, methodID::jmethodID, args::Array{jvalue,1}, penv=ppenv[ Threads.threadid() ]) =
-  ccall(jniref[].CallLongMethodA, jlong, (Ptr{JNIEnv}, jobject, jmethodID, Ptr{jvalue},), penv, obj, methodID, args)
+CallLongMethodA(obj::jobject_arg, methodID::jmethodID, args::Array{JValue,1}, penv=ppenv[ Threads.threadid() ]) =
+  ccall(jniref[].CallLongMethodA, jlong, (Ptr{JNIEnv}, jobject, jmethodID, Ptr{JValue},), penv, obj, methodID, args)
 
-CallFloatMethodA(obj::jobject_arg, methodID::jmethodID, args::Array{jvalue,1}, penv=ppenv[ Threads.threadid() ]) =
-  ccall(jniref[].CallFloatMethodA, jfloat, (Ptr{JNIEnv}, jobject, jmethodID, Ptr{jvalue},), penv, obj, methodID, args)
+CallFloatMethodA(obj::jobject_arg, methodID::jmethodID, args::Array{JValue,1}, penv=ppenv[ Threads.threadid() ]) =
+  ccall(jniref[].CallFloatMethodA, jfloat, (Ptr{JNIEnv}, jobject, jmethodID, Ptr{JValue},), penv, obj, methodID, args)
 
-CallDoubleMethodA(obj::jobject_arg, methodID::jmethodID, args::Array{jvalue,1}, penv=ppenv[ Threads.threadid() ]) =
-  ccall(jniref[].CallDoubleMethodA, jdouble, (Ptr{JNIEnv}, jobject, jmethodID, Ptr{jvalue},), penv, obj, methodID, args)
+CallDoubleMethodA(obj::jobject_arg, methodID::jmethodID, args::Array{JValue,1}, penv=ppenv[ Threads.threadid() ]) =
+  ccall(jniref[].CallDoubleMethodA, jdouble, (Ptr{JNIEnv}, jobject, jmethodID, Ptr{JValue},), penv, obj, methodID, args)
 
-CallVoidMethodA(obj::jobject_arg, methodID::jmethodID, args::Array{jvalue,1}, penv=ppenv[ Threads.threadid() ]) =
-  ccall(jniref[].CallVoidMethodA, Nothing, (Ptr{JNIEnv}, jobject, jmethodID, Ptr{jvalue},), penv, obj, methodID, args)
+CallVoidMethodA(obj::jobject_arg, methodID::jmethodID, args::Array{JValue,1}, penv=ppenv[ Threads.threadid() ]) =
+  ccall(jniref[].CallVoidMethodA, Nothing, (Ptr{JNIEnv}, jobject, jmethodID, Ptr{JValue},), penv, obj, methodID, args)
 
-CallNonvirtualObjectMethodA(obj::jobject_arg, clazz::jclass, methodID::jmethodID, args::Array{jvalue,1}, penv=ppenv[ Threads.threadid() ]) =
-  ccall(jniref[].CallNonvirtualObjectMethodA, jobject, (Ptr{JNIEnv}, jobject, jclass, jmethodID, Ptr{jvalue},), penv, obj, clazz, methodID, args)
+CallNonvirtualObjectMethodA(obj::jobject_arg, clazz::jclass, methodID::jmethodID, args::Array{JValue,1}, penv=ppenv[ Threads.threadid() ]) =
+  ccall(jniref[].CallNonvirtualObjectMethodA, jobject, (Ptr{JNIEnv}, jobject, jclass, jmethodID, Ptr{JValue},), penv, obj, clazz, methodID, args)
 
-CallNonvirtualBooleanMethodA(obj::jobject_arg, clazz::jclass, methodID::jmethodID, args::Array{jvalue,1}, penv=ppenv[ Threads.threadid() ]) =
-  ccall(jniref[].CallNonvirtualBooleanMethodA, jboolean, (Ptr{JNIEnv}, jobject, jclass, jmethodID, Ptr{jvalue},), penv, obj, clazz, methodID, args)
+CallNonvirtualBooleanMethodA(obj::jobject_arg, clazz::jclass, methodID::jmethodID, args::Array{JValue,1}, penv=ppenv[ Threads.threadid() ]) =
+  ccall(jniref[].CallNonvirtualBooleanMethodA, jboolean, (Ptr{JNIEnv}, jobject, jclass, jmethodID, Ptr{JValue},), penv, obj, clazz, methodID, args)
 
-CallNonvirtualByteMethodA(obj::jobject_arg, clazz::jclass, methodID::jmethodID, args::Array{jvalue,1}, penv=ppenv[ Threads.threadid() ]) =
-  ccall(jniref[].CallNonvirtualByteMethodA, jbyte, (Ptr{JNIEnv}, jobject, jclass, jmethodID, Ptr{jvalue},), penv, obj, clazz, methodID, args)
+CallNonvirtualByteMethodA(obj::jobject_arg, clazz::jclass, methodID::jmethodID, args::Array{JValue,1}, penv=ppenv[ Threads.threadid() ]) =
+  ccall(jniref[].CallNonvirtualByteMethodA, jbyte, (Ptr{JNIEnv}, jobject, jclass, jmethodID, Ptr{JValue},), penv, obj, clazz, methodID, args)
 
-CallNonvirtualCharMethodA(obj::jobject_arg, clazz::jclass, methodID::jmethodID, args::Array{jvalue,1}, penv=ppenv[ Threads.threadid() ]) =
-  ccall(jniref[].CallNonvirtualCharMethodA, jchar, (Ptr{JNIEnv}, jobject, jclass, jmethodID, Ptr{jvalue},), penv, obj, clazz, methodID, args)
+CallNonvirtualCharMethodA(obj::jobject_arg, clazz::jclass, methodID::jmethodID, args::Array{JValue,1}, penv=ppenv[ Threads.threadid() ]) =
+  ccall(jniref[].CallNonvirtualCharMethodA, jchar, (Ptr{JNIEnv}, jobject, jclass, jmethodID, Ptr{JValue},), penv, obj, clazz, methodID, args)
 
-CallNonvirtualShortMethodA(obj::jobject_arg, clazz::jclass, methodID::jmethodID, args::Array{jvalue,1}, penv=ppenv[ Threads.threadid() ]) =
-  ccall(jniref[].CallNonvirtualShortMethodA, jshort, (Ptr{JNIEnv}, jobject, jclass, jmethodID, Ptr{jvalue},), penv, obj, clazz, methodID, args)
+CallNonvirtualShortMethodA(obj::jobject_arg, clazz::jclass, methodID::jmethodID, args::Array{JValue,1}, penv=ppenv[ Threads.threadid() ]) =
+  ccall(jniref[].CallNonvirtualShortMethodA, jshort, (Ptr{JNIEnv}, jobject, jclass, jmethodID, Ptr{JValue},), penv, obj, clazz, methodID, args)
 
-CallNonvirtualIntMethodA(obj::jobject_arg, clazz::jclass, methodID::jmethodID, args::Array{jvalue,1}, penv=ppenv[ Threads.threadid() ]) =
-  ccall(jniref[].CallNonvirtualIntMethodA, jint, (Ptr{JNIEnv}, jobject, jclass, jmethodID, Ptr{jvalue},), penv, obj, clazz, methodID, args)
+CallNonvirtualIntMethodA(obj::jobject_arg, clazz::jclass, methodID::jmethodID, args::Array{JValue,1}, penv=ppenv[ Threads.threadid() ]) =
+  ccall(jniref[].CallNonvirtualIntMethodA, jint, (Ptr{JNIEnv}, jobject, jclass, jmethodID, Ptr{JValue},), penv, obj, clazz, methodID, args)
 
-CallNonvirtualLongMethodA(obj::jobject_arg, clazz::jclass, methodID::jmethodID, args::Array{jvalue,1}, penv=ppenv[ Threads.threadid() ]) =
-  ccall(jniref[].CallNonvirtualLongMethodA, jlong, (Ptr{JNIEnv}, jobject, jclass, jmethodID, Ptr{jvalue},), penv, obj, clazz, methodID, args)
+CallNonvirtualLongMethodA(obj::jobject_arg, clazz::jclass, methodID::jmethodID, args::Array{JValue,1}, penv=ppenv[ Threads.threadid() ]) =
+  ccall(jniref[].CallNonvirtualLongMethodA, jlong, (Ptr{JNIEnv}, jobject, jclass, jmethodID, Ptr{JValue},), penv, obj, clazz, methodID, args)
 
-CallNonvirtualFloatMethodA(obj::jobject_arg, clazz::jclass, methodID::jmethodID, args::Array{jvalue,1}, penv=ppenv[ Threads.threadid() ]) =
-  ccall(jniref[].CallNonvirtualFloatMethodA, jfloat, (Ptr{JNIEnv}, jobject, jclass, jmethodID, Ptr{jvalue},), penv, obj, clazz, methodID, args)
+CallNonvirtualFloatMethodA(obj::jobject_arg, clazz::jclass, methodID::jmethodID, args::Array{JValue,1}, penv=ppenv[ Threads.threadid() ]) =
+  ccall(jniref[].CallNonvirtualFloatMethodA, jfloat, (Ptr{JNIEnv}, jobject, jclass, jmethodID, Ptr{JValue},), penv, obj, clazz, methodID, args)
 
-CallNonvirtualDoubleMethodA(obj::jobject_arg, clazz::jclass, methodID::jmethodID, args::Array{jvalue,1}, penv=ppenv[ Threads.threadid() ]) =
-  ccall(jniref[].CallNonvirtualDoubleMethodA, jdouble, (Ptr{JNIEnv}, jobject, jclass, jmethodID, Ptr{jvalue},), penv, obj, clazz, methodID, args)
+CallNonvirtualDoubleMethodA(obj::jobject_arg, clazz::jclass, methodID::jmethodID, args::Array{JValue,1}, penv=ppenv[ Threads.threadid() ]) =
+  ccall(jniref[].CallNonvirtualDoubleMethodA, jdouble, (Ptr{JNIEnv}, jobject, jclass, jmethodID, Ptr{JValue},), penv, obj, clazz, methodID, args)
 
-CallNonvirtualVoidMethodA(obj::jobject_arg, clazz::jclass, methodID::jmethodID, args::Array{jvalue,1}, penv=ppenv[ Threads.threadid() ]) =
-  ccall(jniref[].CallNonvirtualVoidMethodA, Nothing, (Ptr{JNIEnv}, jobject, jclass, jmethodID, Ptr{jvalue},), penv, obj, clazz, methodID, args)
+CallNonvirtualVoidMethodA(obj::jobject_arg, clazz::jclass, methodID::jmethodID, args::Array{JValue,1}, penv=ppenv[ Threads.threadid() ]) =
+  ccall(jniref[].CallNonvirtualVoidMethodA, Nothing, (Ptr{JNIEnv}, jobject, jclass, jmethodID, Ptr{JValue},), penv, obj, clazz, methodID, args)
 
 GetFieldID(clazz::jclass, name::AnyString, sig::AnyString, penv=ppenv[ Threads.threadid() ]) =
   ccall(jniref[].GetFieldID, jfieldID, (Ptr{JNIEnv}, jclass, Cstring, Cstring,), penv, clazz, name, sig)
@@ -440,35 +457,35 @@ SetDoubleField(obj::jobject_arg, fieldID::jfieldID, val::jdouble, penv=ppenv[ Th
 GetStaticMethodID(clazz::jclass, name::AnyString, sig::AnyString, penv=ppenv[ Threads.threadid() ]) =
   ccall(jniref[].GetStaticMethodID, jmethodID, (Ptr{JNIEnv}, jclass, Cstring, Cstring,), penv, clazz, name, sig)
 
-CallStaticObjectMethodA(clazz::jclass, methodID::jmethodID, args::Array{jvalue,1}, penv=ppenv[ Threads.threadid() ]) =
-  ccall(jniref[].CallStaticObjectMethodA, jobject, (Ptr{JNIEnv}, jclass, jmethodID, Ptr{jvalue},), penv, clazz, methodID, args)
+CallStaticObjectMethodA(clazz::jclass, methodID::jmethodID, args::Array{JValue,1}, penv=ppenv[ Threads.threadid() ]) =
+  ccall(jniref[].CallStaticObjectMethodA, jobject, (Ptr{JNIEnv}, jclass, jmethodID, Ptr{JValue},), penv, clazz, methodID, args)
 
-CallStaticBooleanMethodA(clazz::jclass, methodID::jmethodID, args::Array{jvalue,1}, penv=ppenv[ Threads.threadid() ]) =
-  ccall(jniref[].CallStaticBooleanMethodA, jboolean, (Ptr{JNIEnv}, jclass, jmethodID, Ptr{jvalue},), penv, clazz, methodID, args)
+CallStaticBooleanMethodA(clazz::jclass, methodID::jmethodID, args::Array{JValue,1}, penv=ppenv[ Threads.threadid() ]) =
+  ccall(jniref[].CallStaticBooleanMethodA, jboolean, (Ptr{JNIEnv}, jclass, jmethodID, Ptr{JValue},), penv, clazz, methodID, args)
 
-CallStaticByteMethodA(clazz::jclass, methodID::jmethodID, args::Array{jvalue,1}, penv=ppenv[ Threads.threadid() ]) =
-  ccall(jniref[].CallStaticByteMethodA, jbyte, (Ptr{JNIEnv}, jclass, jmethodID, Ptr{jvalue},), penv, clazz, methodID, args)
+CallStaticByteMethodA(clazz::jclass, methodID::jmethodID, args::Array{JValue,1}, penv=ppenv[ Threads.threadid() ]) =
+  ccall(jniref[].CallStaticByteMethodA, jbyte, (Ptr{JNIEnv}, jclass, jmethodID, Ptr{JValue},), penv, clazz, methodID, args)
 
-CallStaticCharMethodA(clazz::jclass, methodID::jmethodID, args::Array{jvalue,1}, penv=ppenv[ Threads.threadid() ]) =
-  ccall(jniref[].CallStaticCharMethodA, jchar, (Ptr{JNIEnv}, jclass, jmethodID, Ptr{jvalue},), penv, clazz, methodID, args)
+CallStaticCharMethodA(clazz::jclass, methodID::jmethodID, args::Array{JValue,1}, penv=ppenv[ Threads.threadid() ]) =
+  ccall(jniref[].CallStaticCharMethodA, jchar, (Ptr{JNIEnv}, jclass, jmethodID, Ptr{JValue},), penv, clazz, methodID, args)
 
-CallStaticShortMethodA(clazz::jclass, methodID::jmethodID, args::Array{jvalue,1}, penv=ppenv[ Threads.threadid() ]) =
-  ccall(jniref[].CallStaticShortMethodA, jshort, (Ptr{JNIEnv}, jclass, jmethodID, Ptr{jvalue},), penv, clazz, methodID, args)
+CallStaticShortMethodA(clazz::jclass, methodID::jmethodID, args::Array{JValue,1}, penv=ppenv[ Threads.threadid() ]) =
+  ccall(jniref[].CallStaticShortMethodA, jshort, (Ptr{JNIEnv}, jclass, jmethodID, Ptr{JValue},), penv, clazz, methodID, args)
 
-CallStaticIntMethodA(clazz::jclass, methodID::jmethodID, args::Array{jvalue,1}, penv=ppenv[ Threads.threadid() ]) =
-  ccall(jniref[].CallStaticIntMethodA, jint, (Ptr{JNIEnv}, jclass, jmethodID, Ptr{jvalue},), penv, clazz, methodID, args)
+CallStaticIntMethodA(clazz::jclass, methodID::jmethodID, args::Array{JValue,1}, penv=ppenv[ Threads.threadid() ]) =
+  ccall(jniref[].CallStaticIntMethodA, jint, (Ptr{JNIEnv}, jclass, jmethodID, Ptr{JValue},), penv, clazz, methodID, args)
 
-CallStaticLongMethodA(clazz::jclass, methodID::jmethodID, args::Array{jvalue,1}, penv=ppenv[ Threads.threadid() ]) =
-  ccall(jniref[].CallStaticLongMethodA, jlong, (Ptr{JNIEnv}, jclass, jmethodID, Ptr{jvalue},), penv, clazz, methodID, args)
+CallStaticLongMethodA(clazz::jclass, methodID::jmethodID, args::Array{JValue,1}, penv=ppenv[ Threads.threadid() ]) =
+  ccall(jniref[].CallStaticLongMethodA, jlong, (Ptr{JNIEnv}, jclass, jmethodID, Ptr{JValue},), penv, clazz, methodID, args)
 
-CallStaticFloatMethodA(clazz::jclass, methodID::jmethodID, args::Array{jvalue,1}, penv=ppenv[ Threads.threadid() ]) =
-  ccall(jniref[].CallStaticFloatMethodA, jfloat, (Ptr{JNIEnv}, jclass, jmethodID, Ptr{jvalue},), penv, clazz, methodID, args)
+CallStaticFloatMethodA(clazz::jclass, methodID::jmethodID, args::Array{JValue,1}, penv=ppenv[ Threads.threadid() ]) =
+  ccall(jniref[].CallStaticFloatMethodA, jfloat, (Ptr{JNIEnv}, jclass, jmethodID, Ptr{JValue},), penv, clazz, methodID, args)
 
-CallStaticDoubleMethodA(clazz::jclass, methodID::jmethodID, args::Array{jvalue,1}, penv=ppenv[ Threads.threadid() ]) =
-  ccall(jniref[].CallStaticDoubleMethodA, jdouble, (Ptr{JNIEnv}, jclass, jmethodID, Ptr{jvalue},), penv, clazz, methodID, args)
+CallStaticDoubleMethodA(clazz::jclass, methodID::jmethodID, args::Array{JValue,1}, penv=ppenv[ Threads.threadid() ]) =
+  ccall(jniref[].CallStaticDoubleMethodA, jdouble, (Ptr{JNIEnv}, jclass, jmethodID, Ptr{JValue},), penv, clazz, methodID, args)
 
-CallStaticVoidMethodA(cls::jclass, methodID::jmethodID, args::Array{jvalue,1}, penv=ppenv[ Threads.threadid() ]) =
-  ccall(jniref[].CallStaticVoidMethodA, Nothing, (Ptr{JNIEnv}, jclass, jmethodID, Ptr{jvalue},), penv, cls, methodID, args)
+CallStaticVoidMethodA(cls::jclass, methodID::jmethodID, args::Array{JValue,1}, penv=ppenv[ Threads.threadid() ]) =
+  ccall(jniref[].CallStaticVoidMethodA, Nothing, (Ptr{JNIEnv}, jclass, jmethodID, Ptr{JValue},), penv, cls, methodID, args)
 
 GetStaticFieldID(clazz::jclass, name::AnyString, sig::AnyString, penv=ppenv[ Threads.threadid() ]) =
   ccall(jniref[].GetStaticFieldID, jfieldID, (Ptr{JNIEnv}, jclass, Cstring, Cstring,), penv, clazz, name, sig)
