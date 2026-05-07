@@ -21,6 +21,7 @@ indefinitely, so daemon attach matches their lifecycle.
 
 # Cache: one Ptr{JNIEnv} per OS thread.
 const _env_cache = Base.OncePerThread{Ptr{JNI.JNIEnv}}() do
+    assertloaded()
     pp = Ref{Ptr{JNI.JNIEnv}}(C_NULL)
     res = ccall(JNI.jvmfunc[].AttachCurrentThreadAsDaemon, Cint,
                 (Ptr{Nothing}, Ptr{Ptr{JNI.JNIEnv}}, Ptr{Nothing}),
