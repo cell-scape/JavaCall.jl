@@ -298,6 +298,7 @@ function _init(opts)
     assertnotloaded()
     assertroottask_or_goodenv()
     JNI.init_new_vm(findjvm(),opts);
+    start_dispatch_task!()
 end
 
 """
@@ -347,5 +348,6 @@ end
 
 function destroy()
     assertroottask_or_goodenv()
+    stop_dispatch_task!()
     JNI.destroy()
 end
