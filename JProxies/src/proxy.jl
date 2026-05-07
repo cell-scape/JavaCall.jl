@@ -324,7 +324,7 @@ macro message(obj, rettype, methodid, args...)
         #result = ccall(jnifunc.$func, Ptr{Nothing},
         #               (Ptr{JNIEnv}, Ptr{Nothing}, Ptr{Nothing}, $((typeof(arg) for arg in args)...)),
         #               penv, $(esc(obj)), $(esc(methodid)), $(esc.(args)...))
-        result = JNI.$func($(esc(obj)), $(esc(methodid)), JNI.jvalue.([$(esc.(args)...)]))
+        result = JNI.$func($(esc(obj)), $(esc(methodid)), JNI.JValue.([$(esc.(args)...)]))
         result == C_NULL && geterror()
         $(if rettype == Ptr{Nothing} || rettype == :(Ptr{Nothing})
               :(registerreturn(result))
@@ -826,9 +826,9 @@ function _defbox(primclass, boxtype, juliatype, javatype, boxclassname)
             #               (Ptr{JNIEnv}, Ptr{Nothing}, Ptr{Nothing}, $juliatype),
             #               penv, $boxVar.boxClass.ptr, $boxVar.boxer, data)
             if isa(data,Array)
-                result = JNI.NewObjectA(Ptr($boxVar.boxClass), $boxVar.boxer, JNI.jvalue.(data))
+                result = JNI.NewObjectA(Ptr($boxVar.boxClass), $boxVar.boxer, JNI.JValue.(data))
             else
-                result = JNI.NewObjectA(Ptr($boxVar.boxClass), $boxVar.boxer, JNI.jvalue.([data]))
+                result = JNI.NewObjectA(Ptr($boxVar.boxClass), $boxVar.boxer, JNI.JValue.([data]))
             end
             result == C_NULL && geterror()
             registerreturn(result)
@@ -1206,7 +1206,7 @@ function (pxy::JProxy{T, STATIC})(args...) where {T, STATIC}
             #result = ccall(jnifunc.NewObjectA, Ptr{Nothing},
             #               (Ptr{JNIEnv}, Ptr{Nothing}, Ptr{Nothing}, Ptr{Nothing}),
             #               penv, info.class.ptr, meth.id, convertedargs)
-            result = JNI.NewObjectA(Ptr(info.class), meth.id, JNI.jvalue.(convertedargs))
+            result = JNI.NewObjectA(Ptr(info.class), meth.id, JNI.JValue.(convertedargs))
             result == C_NULL && geterror()
             JProxy(result)
         else
@@ -1358,13 +1358,13 @@ macro defcall(t, f, ft)
     #:(_call(::Type{$t}, obj, mId, args) = ccall(jnifunc.$(Symbol("Call" * string(f) * "MethodA")), $ft,
     #                                           (Ptr{JNIEnv}, Ptr{Nothing}, Ptr{Nothing}, Ptr{Nothing}),
     #                                           penv, obj, mId, args))
-    :(_call(::Type{$t}, obj, mId, args) = JNI.$(Symbol("Call" * string(f) * "MethodA"))(obj, mId, JNI.jvalue.(args)))                                           
+    :(_call(::Type{$t}, obj, mId, args) = JNI.$(Symbol("Call" * string(f) * "MethodA"))(obj, mId, JNI.JValue.(args)))                                           
 end
 
 #_call(::Type, obj, mId, args) = ccall(jnifunc.CallObjectMethodA, Ptr{Nothing},
 #                                      (Ptr{JNIEnv}, Ptr{Nothing}, Ptr{Nothing}, Ptr{Nothing}),
 #                                      penv, obj, mId, args)
-_call(::Type, obj, mId, args) = JNI.CallObjectMethodA(obj, mId, JNI.jvalue.(args))
+_call(::Type, obj, mId, args) = JNI.CallObjectMethodA(obj, mId, JNI.JValue.(args))
 @defcall(Bool, Boolean, jboolean)
 @defcall(jbyte, Byte, jbyte)
 @defcall(jchar, Char, jchar)
@@ -1393,15 +1393,15 @@ macro defstaticcall(t, f, ft)
     #:(_staticcall(::Type{$t}, class, mId, args) = ccall(jnifunc.$(Symbol("CallStatic" * string(f) * "MethodA")), $ft,
     #                                             (Ptr{JNIEnv}, Ptr{Nothing}, Ptr{Nothing}, Ptr{Nothing}),
     #                                             penv, class, mId, args))
-    :(_staticcall(::Type{$t}, class, mId, args) = JNI.$(Symbol("CallStatic" * string(f) * "MethodA"))(class, mId, JNI.jvalue.([args])))
-    :(_staticcall(::Type{$t}, class, mId, args::Array) = JNI.$(Symbol("CallStatic" * string(f) * "MethodA"))(class, mId, JNI.jvalue.(args)))
+    :(_staticcall(::Type{$t}, class, mId, args) = JNI.$(Symbol("CallStatic" * string(f) * "MethodA"))(class, mId, JNI.JValue.([args])))
+    :(_staticcall(::Type{$t}, class, mId, args::Array) = JNI.$(Symbol("CallStatic" * string(f) * "MethodA"))(class, mId, JNI.JValue.(args)))
 end
 
 #_staticcall(::Type, class, mId, args) = ccall(jnifunc.CallStaticObjectMethodA, Ptr{Nothing},
 #  (Ptr{JNIEnv}, Ptr{Nothing}, Ptr{Nothing}, Ptr{Nothing}),
 #  penv, class, mId, args)
-_staticcall(::Type, class, mId, args::Array) = JNI.CallStaticObjectMethodA(class, mId, JNI.jvalue.(args))
-_staticcall(::Type, class, mId, args) = JNI.CallStaticObjectMethodA(class, mId, JNI.jvalue.([args]))
+_staticcall(::Type, class, mId, args::Array) = JNI.CallStaticObjectMethodA(class, mId, JNI.JValue.(args))
+_staticcall(::Type, class, mId, args) = JNI.CallStaticObjectMethodA(class, mId, JNI.JValue.([args]))
 
 @defstaticcall(Bool, Boolean, jboolean)
 @defstaticcall(jbyte, Byte, jbyte)

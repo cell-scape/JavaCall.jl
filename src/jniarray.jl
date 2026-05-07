@@ -31,7 +31,7 @@ function deleteref(x::JNIVector{T}) where T
 end
 
 signature(::Type{JNIVector{T}}) where T = string("[", signature(T))
-jvalue(jarr::JNIVector) = jarr.ref.ptr
+jvalue(jarr::JNIVector)::JNI.JValue = JNI.JValue(Int64(UInt(jarr.ref.ptr)))
 JNIVector{T}(ptr::Ptr{Nothing}) where {T} = JNIVector{T}(JavaLocalRef(ptr))
 
 function convert(::Type{JNIVector{T}}, vec::Vector{T}) where {T}
