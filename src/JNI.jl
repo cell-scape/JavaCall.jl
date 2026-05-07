@@ -78,9 +78,11 @@ integers in ccall signatures.
 """
 primitive type JValue 64 end
 
-JValue(x::Int64)  = reinterpret(JValue, x)
-JValue(x::UInt64) = reinterpret(JValue, x)
-JValue(x::Ptr)    = reinterpret(JValue, Int64(UInt(x)))
+JValue(x::Int64)   = reinterpret(JValue, x)
+JValue(x::UInt64)  = reinterpret(JValue, x)
+JValue(x::Float64) = reinterpret(JValue, x)
+JValue(x::Float32) = reinterpret(JValue, Int64(reinterpret(UInt32, x)))
+JValue(x::Ptr)     = reinterpret(JValue, Int64(UInt(x)))
 Base.zero(::Type{JValue}) = reinterpret(JValue, Int64(0))
 Base.convert(::Type{JValue}, x::Integer) = JValue(Int64(x))
 
