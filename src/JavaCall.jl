@@ -30,11 +30,8 @@ end
 
 import Base: convert, unsafe_convert, unsafe_string, Ptr
 
-JULIA_COPY_STACKS = false
-
 include("JNI.jl")
 using .JNI
-import .JNI.Threads
 include("jvm.jl")
 include("env.jl")
 include("dispatch.jl")
@@ -47,19 +44,10 @@ include("jcall_macro.jl")
 Base.@deprecate_binding jnifunc JavaCall.JNI.jniref[]
 
 function __init__()
-    global JULIA_COPY_STACKS = get(ENV, "JULIA_COPY_STACKS", "") ∈ ("1", "yes")
-    if ! Sys.iswindows()
-        # On Windows, JULIA_COPY_STACKS is not needed and causes crash
-        if VERSION ≥ v"1.1-" && VERSION < v"1.3-"
-            @warn("JavaCall does not work correctly on Julia v$VERSION. \n" *
-                    "Either use Julia v1.0.x, or v1.3.0 or higher.\n"*
-                    "For 1.3 onwards, please also set the environment variable `JULIA_COPY_STACKS` to be `1` or `yes`")
-        end
-        if VERSION ≥ v"1.3-" && ! JULIA_COPY_STACKS
-            @warn("JavaCall needs the environment variable `JULIA_COPY_STACKS` to be `1` or `yes`.\n"*
-                  "Calling the JVM may result in undefined behavior.")
-        end
-    end
+    # No-op for now. The JVM lifecycle is owned by JavaCall.init() /
+    # JavaCall.destroy() in src/jvm.jl, which spawn / stop the dispatch
+    # task as part of init_new_vm. There's no per-Julia-process state
+    # to set up here.
 end
 
 

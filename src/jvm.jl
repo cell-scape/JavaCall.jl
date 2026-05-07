@@ -228,28 +228,6 @@ function addOpts(s::String)
     end
 end
 
-const ROOT_TASK_ERROR = JavaCallError(
-    "Either the environmental variable JULIA_COPY_STACKS must be 1 " *
-    "OR JavaCall must be used on the root Task.")
-
-const JULIA_COPY_STACKS_ON_WINDOWS_ERROR = JavaCallError(
-    "JULIA_COPY_STACKS should not be set on Windows.")
-
-const THREADID_NOT_ONE_WINDOWS_ERROR = JavaCallError(
-    "JavaCall must be used on Thread 1 only in Windows. Multithreading JavaCall is not supported on Windows."
-)
-
-# JavaCall must run on the root Task or JULIA_COPY_STACKS is enabled
-isroottask() = Base.roottask === Base.current_task()
-@static if Sys.iswindows()
-    isgoodenv() = ( ! JULIA_COPY_STACKS ) && Base.Threads.threadid() == 1
-    assertroottask_or_goodenv() = isgoodenv() ? true : Base.Threads.threadid() == 1 ?
-        throw(JULIA_COPY_STACKS_ON_WINDOWS_ERROR) : throw(THREADID_NOT_ONE_WINDOWS_ERROR)
-else
-    isgoodenv() = JULIA_COPY_STACKS || isroottask()
-    assertroottask_or_goodenv() = isgoodenv() ? true : throw(ROOT_TASK_ERROR)
-end
-
 isloaded() = JNI.is_jni_loaded() && JNI.is_env_loaded()
 
 assertloaded() = isloaded() ? true : throw(JavaCallError("JVM not initialised. Please run init()"))
@@ -296,7 +274,6 @@ end
 # Pointer to pointer to pointer to pointer alert! Hurrah for unsafe load
 function _init(opts)
     assertnotloaded()
-    assertroottask_or_goodenv()
     JNI.init_new_vm(findjvm(),opts);
     start_dispatch_task!()
 end
@@ -347,7 +324,6 @@ function init_current_vm()
 end
 
 function destroy()
-    assertroottask_or_goodenv()
     stop_dispatch_task!()
     JNI.destroy()
 end

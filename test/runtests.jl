@@ -12,21 +12,12 @@ macro syncasync(x)
     :( (@sync @async eval($x)).result ) |> esc
 end
 
-JAVACALL_FORCE_ASYNC_INIT = get(ENV,"JAVACALL_FORCE_ASYNC_INIT","") ∈ ("1","yes")
-JAVACALL_FORCE_ASYNC_TEST = get(ENV,"JAVACALL_FORCE_ASYNC_TEST","") ∈ ("1","yes")
-
 @testset "initialization" begin
     JavaCall.addClassPath("foo")
     JavaCall.addOpts("-Djava.class.path=bar")
     JavaCall.addOpts("-Xmx512M")
-    if JavaCall.JULIA_COPY_STACKS || JAVACALL_FORCE_ASYNC_INIT
-        @testasync JavaCall.init(["-Djava.class.path=$(@__DIR__)"])==nothing
-    else
-        @test JavaCall.init(["-Djava.class.path=$(@__DIR__)"])==nothing
-    end
-    @test match(r"foo[:;]+bar",JavaCall.getClassPath()) != nothing
-    # JavaCall.init(["-verbose:gc","-Djava.class.path=$(@__DIR__)"])
-    # JavaCall.init()
+    @test JavaCall.init(["-Djava.class.path=$(@__DIR__)"]) === nothing
+    @test match(r"foo[:;]+bar", JavaCall.getClassPath()) !== nothing
 end
 
 System = @jimport java.lang.System
@@ -75,11 +66,21 @@ end
 end
 
 @testset "static_method_call_async_1" begin
-    jlm = @jimport "java.lang.Math"
-    if JAVACALL_FORCE_ASYNC_TEST || JavaCall.JULIA_COPY_STACKS || Sys.iswindows()
+    # @async paths still depend on JULIA_COPY_STACKS=1 on non-Windows, OR
+    # the test running on Windows. The Phase 2 env-cache fixes the
+    # "which JNIEnv* on which thread" question, but the underlying
+    # HotSpot stack-walking issue with Julia's task-switched stacks
+    # (which JULIA_COPY_STACKS=1 papers over) is still real for tasks
+    # that yield mid-flight. Synchronous jcall on the main task works
+    # everywhere without env vars.
+    julia_copy_stacks = get(ENV, "JULIA_COPY_STACKS", "") ∈ ("1", "yes")
+    if julia_copy_stacks || Sys.iswindows()
+        jlm = @jimport "java.lang.Math"
         @testasync 1.0 ≈ jcall(jlm, "sin", jdouble, (jdouble,), pi/2)
         @testasync 1.0 ≈ jcall(jlm, "min", jdouble, (jdouble,jdouble), 1,2)
         @testasync 1 == jcall(jlm, "abs", jint, (jint,), -1)
+    else
+        @test_skip "@async paths still need JULIA_COPY_STACKS=1 on non-Windows"
     end
 end
 
@@ -393,22 +394,6 @@ end
 
     o = convert(JObject, "bla bla bla")
     @test isa(narrow(o), JString)
-end
-
-@testset "roottask_and_env_1" begin
-    @test JavaCall.isroottask()
-    @testasync ! JavaCall.isroottask()
-    @test JavaCall.isgoodenv()
-    if JAVACALL_FORCE_ASYNC_TEST || JavaCall.JULIA_COPY_STACKS || Sys.iswindows()
-        @testasync JavaCall.isgoodenv()
-    end
-    if ! JavaCall.JULIA_COPY_STACKS && ! Sys.iswindows()
-        @test_throws CompositeException @syncasync JavaCall.assertroottask_or_goodenv()
-        @warn "Ran tests for root Task only." *
-            " REPL and @async are not expected to work with JavaCall without JULIA_COPY_STACKS=1" *
-            " on non-Windows systems."
-            " Set JULIA_COPY_STACKS=1 in the environment to test @async function."
-    end
 end
 
 @testset "metaclass_cache" begin

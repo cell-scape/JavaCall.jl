@@ -16,7 +16,6 @@ export JNI_VERSION_1_1, JNI_VERSION_1_2, JNI_VERSION_1_4, JNI_VERSION_1_6, JNI_V
 export JNI_OK, JNI_ERR, JNI_EDETACHED, JNI_EVERSION, JNI_ENOMEM, JNI_EEXIST, JNI_EINV
 #export jnifunc
 
-include("Threads.jl")
 include("jnienv.jl")
 
 const jniref = Ref(JNINativeInterface())
@@ -172,7 +171,6 @@ function init_new_vm(libpath,opts)
     libjvm = load_libjvm(libpath)
     create = Libdl.dlsym(libjvm, :JNI_CreateJavaVM)
     opt = [JavaVMOption(pointer(x), C_NULL) for x in opts]
-    Threads.resize_nthreads!(ppenv)
     # Preserve both the option struct array AND the underlying option strings:
     # `opt` holds raw pointers into each string in `opts`, but does not keep
     # those strings rooted on its own.
@@ -186,32 +184,7 @@ function init_new_vm(libpath,opts)
     jvm = unsafe_load(ppjvm[])
     jvmfunc[] = unsafe_load(jvm.JNIInvokeInterface_)
     load_jni(ppenv[1])
-    attach_threads()
     return
-end
-
-function attach_current_thread(ppenv_thread = Ref{Ptr{JNIEnv}}(C_NULL))
-    res = ccall(jvmfunc[].AttachCurrentThread, Cint, (Ptr{Nothing}, Ptr{Ptr{JNIEnv}}, Ptr{Nothing}), ppjvm[], ppenv_thread, C_NULL)
-    res < 0 && throw(JNIError("Unable to attach thread id: $(Threads.threadid())"))
-    return ppenv_thread[]
-end
-
-function attach_threads()
-    # Each iteration must run on the OS thread whose env pointer we want
-    # to store. Under Threads.@threads's :dynamic schedule (default since
-    # Julia 1.8), iterations can pile up on one thread and miss others, so
-    # request :static scheduling explicitly to bind iteration i to thread i.
-    # On Julia 1.6/1.7, @threads was already static-by-default and the
-    # :static keyword is not accepted by the macro.
-    @static if VERSION >= v"1.8"
-        Threads.@threads :static for i=1:Threads.nthreads()
-            attach_current_thread(Ref(ppenv, i))
-        end
-    else
-        Threads.@threads for i=1:Threads.nthreads()
-            attach_current_thread(Ref(ppenv, i))
-        end
-    end
 end
 
 
