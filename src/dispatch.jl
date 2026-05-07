@@ -8,10 +8,11 @@ finalization (and, in Phase 2C, callbacks) always runs on a known-good
 JNI context regardless of which Julia task or thread originated the
 message.
 
-In this branch (Phase 2A), the dispatch task is up but receives no
-messages — `deleteref` still calls JNI directly. The
-`phase-2/finalizer-routing` branch later replaces direct JNI calls with
-channel posts.
+This branch (Phase 2A milestone 3) introduces the message types,
+the lifecycle, and a working drain loop. Real workloads are not
+yet routed through it — `deleteref` still calls JNI directly until
+milestone 6, which replaces the direct JNI call with a channel
+post.
 """
 
 abstract type DispatchMsg end
@@ -63,13 +64,14 @@ _handle(msg::Shutdown) = nothing
 function _drain_loop()
     while true
         msg = take!(_dispatch_channel)
+        msg isa Shutdown && break
         try
             _handle(msg)
         catch err
+            err isa InterruptException && rethrow()
+            err isa OutOfMemoryError && rethrow()
             @error "Dispatch task error" exception=(err, catch_backtrace())
-            # Continue: one bad message must not kill the loop.
         end
-        msg isa Shutdown && break
     end
 end
 
@@ -83,13 +85,17 @@ valid throughout.
 """
 function start_dispatch_task!()
     isassigned(_dispatch_task) && !istaskdone(_dispatch_task[]) && return
-    t = Base.Threads.@spawn :interactive begin
+    t = Task() do
         # Eagerly attach this OS thread so subsequent _handle calls don't
         # pay the attach cost on the first message.
         with_env() do _ end
         _drain_loop()
     end
+    # Set sticky BEFORE schedule so the task can never migrate. Scheduling
+    # a sticky task pins it to the scheduling thread (typically thread 1
+    # at JVM init time).
     t.sticky = true
+    schedule(t)
     _dispatch_task[] = t
     Base.errormonitor(t)
     return

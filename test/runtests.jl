@@ -484,10 +484,13 @@ end
 end
 
 @testset "dispatch_task_survives_handler_error" begin
-    # Post a benign DeleteRef (NULL ptr is a no-op per JNI spec); verify
-    # the dispatch task drains it and stays alive.
+    initial = JavaCall._dispatch_processed_count[]
     push!(JavaCall._dispatch_channel, JavaCall.DeleteRef(C_NULL, :local))
-    sleep(0.05)
+    deadline = time() + 2.0
+    while JavaCall._dispatch_processed_count[] == initial && time() < deadline
+        yield()
+    end
+    @test JavaCall._dispatch_processed_count[] >= initial + 1
     @test !istaskdone(JavaCall._dispatch_task[])
 end
 
