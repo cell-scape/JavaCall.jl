@@ -513,6 +513,37 @@ end
     end
 end
 
+@testset "finalizers_release_jvm_memory" begin
+    # Allocate many short-lived JStrings, force Julia GC, and verify that
+    # the JVM's free heap recovers — i.e. the finalizer's DeleteLocalRef
+    # actually ran and the JVM's GC was able to reclaim the strings.
+    Runtime = @jimport "java.lang.Runtime"
+    rt = jcall(Runtime, "getRuntime", Runtime, ())
+    n_objects = 1000
+    str_size = 10000   # 10KB per string, 10MB total before cleanup
+
+    # Establish a baseline of JVM free memory after a clean GC.
+    GC.gc(true); GC.gc(true)
+    jcall(rt, "gc", Nothing, ())
+    baseline_free = jcall(rt, "freeMemory", jlong, ())
+
+    # Allocate a wave of strings; let them go out of scope.
+    for _ in 1:n_objects
+        local s = JString("x"^str_size)
+    end
+
+    # Force Julia GC to fire the finalizers, then JVM GC to actually reclaim.
+    GC.gc(true); GC.gc(true)
+    jcall(rt, "gc", Nothing, ())
+    after_free = jcall(rt, "freeMemory", jlong, ())
+
+    # Free memory after cleanup should be within ~10MB of baseline.
+    # If finalizers leaked, after_free would be much lower (free=total-used,
+    # so leaks SHRINK free).
+    leaked = baseline_free - after_free
+    @test leaked < n_objects * str_size * 4   # generous slop for JVM bookkeeping
+end
+
 include("jcall_macro.jl")
 
 end

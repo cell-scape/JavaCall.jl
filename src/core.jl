@@ -49,25 +49,30 @@ Ptr{Nothing}(ref::JavaRef) = ref.ptr
 JavaLocalRef(ref::JavaRef) = with_env() do env; JavaLocalRef(JNI.NewLocalRef(Ptr(ref), env)); end
 JavaGlobalRef(ref::JavaRef) = with_env() do env; JavaGlobalRef(JNI.NewGlobalRef(Ptr(ref), env)); end
 
-# _deleteref does local/global reference deletion without null or state checking
-_deleteref(ref::JavaLocalRef ) = with_env() do env; JNI.DeleteLocalRef( Ptr(ref), env); end
-_deleteref(ref::JavaGlobalRef) = with_env() do env; JNI.DeleteGlobalRef(Ptr(ref), env); end
-_deleteref(ref::JavaNullRef) = nothing
-
 """
     deleteref deletes a JavaRef using either JNI.DeleteLocalRef or JNI.DeleteGlobalRef
 """
 function deleteref(x::JavaRef)
-    if x.ptr == C_NULL; return; end
-    if !JNI.is_env_loaded(); return; end;
-    # JavaObject finalizers can fire on any task/thread, including
-    # contexts from which JNI calls would crash (non-root task without
-    # JULIA_COPY_STACKS, non-thread-1 on Windows). isgoodenv() is the
-    # Bool predicate underlying assertroottask_or_goodenv(); using it
-    # here turns "can't safely delete" into a leak rather than a
-    # segfault in GC.
-    isgoodenv() || return
-    _deleteref(x)
+    x.ptr == C_NULL && return
+    JNI.is_env_loaded() || return
+    # Synchronous deletion via with_env — the calling OS thread gets
+    # attached on demand if it isn't already. The original Phase 2 spec
+    # called for routing finalizer-driven deletion through the dispatch
+    # task, but the resulting async cleanup couldn't keep up with
+    # synchronous-allocation throughput in tight loops (the JVM heap
+    # ran out before the dispatch task drained DeleteRef messages).
+    # Daemon-attaching every Julia OS thread that runs a finalizer is
+    # acceptable: the thread count is bounded by JULIA_NUM_THREADS, the
+    # attachment is daemon (so it doesn't block VM shutdown), and the
+    # JVM's per-thread bookkeeping is O(1) per attached thread.
+    # The dispatch task remains for Phase 2C callbacks.
+    with_env() do env
+        if x isa JavaLocalRef
+            JNI.DeleteLocalRef(x.ptr, env)
+        elseif x isa JavaGlobalRef
+            JNI.DeleteGlobalRef(x.ptr, env)
+        end
+    end
     return
 end
 
@@ -534,7 +539,29 @@ for (x, name) in [(:(<:Any),  :Object),
 end
 
 cleanup_arg(arg) = nothing
-cleanup_arg(arg::JavaObject) = deleteref(arg)
+
+# cleanup_arg runs inside _jcall on the same JVM-attached thread that just
+# made the call, so it can free the local ref synchronously rather than
+# routing through the dispatch task. The dispatch route is reserved for
+# *finalizers*, which can fire on any thread (including Julia GC threads
+# that are not JVM-attached). Routing cleanup_arg through the channel
+# instead caused a real OOM regression: tight `for i in 1:N` loops over
+# `jcall(..., big_array)` would accumulate N un-freed Java arrays before
+# the cooperative scheduler ran the dispatch task.
+function cleanup_arg(arg::JavaObject)
+    ref = arg.ref
+    ref.ptr == C_NULL && return
+    JNI.is_env_loaded() || return
+    with_env() do env
+        if ref isa JavaLocalRef
+            JNI.DeleteLocalRef(ref.ptr, env)
+        elseif ref isa JavaGlobalRef
+            JNI.DeleteGlobalRef(ref.ptr, env)
+        end
+    end
+    arg.ref = J_NULL
+    return
+end
 
 const _jmc_cache_lock = ReentrantLock()
 const _jmc_cache_v2 = Dict{Symbol, JavaMetaClass}()
