@@ -475,6 +475,22 @@ end
     end
 end
 
+@testset "dispatch_task_lifecycle" begin
+    # The dispatch task should be alive after JavaCall.init() and have
+    # processed zero messages so far (we haven't routed anything to it).
+    @test JavaCall._dispatch_task[] isa Task
+    @test !istaskdone(JavaCall._dispatch_task[])
+    @test isready(JavaCall._dispatch_channel) == false
+end
+
+@testset "dispatch_task_survives_handler_error" begin
+    # Post a benign DeleteRef (NULL ptr is a no-op per JNI spec); verify
+    # the dispatch task drains it and stays alive.
+    push!(JavaCall._dispatch_channel, JavaCall.DeleteRef(C_NULL, :local))
+    sleep(0.05)
+    @test !istaskdone(JavaCall._dispatch_task[])
+end
+
 include("jcall_macro.jl")
 
 end
