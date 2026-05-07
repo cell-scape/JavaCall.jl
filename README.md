@@ -11,7 +11,7 @@ Documentation is available at http://juliainterop.github.io/JavaCall.jl
 ## Quick Start Example Usage
 
 ```julia
-$ JULIA_NUM_THREADS=1 JULIA_COPY_STACKS=1 julia
+$ julia
 
 julia> using Pkg; Pkg.activate(; temp = true)
   Activating new project at `/tmp/jl_e6uPja`
@@ -52,28 +52,12 @@ Hello World
 
 JavaCall.jl 0.9 requires Julia 1.12 or newer. CI tests Julia 1.12 (`min`), Julia LTS, and the latest stable release. For older Julia versions, use JavaCall.jl 0.8.x.
 
-## macOS and Linux
+## Threading and platform support
 
-For Julia 1.3 onwards, please set the environment variable `JULIA_COPY_STACKS = 1`.
-For Julia 1.11 onwards, please also set `JULIA_NUM_THREADS = 1`
+JavaCall.jl 0.9 supports multithreaded JNI access on Linux, macOS, and Windows alike. The package attaches each Julia OS thread to the JVM lazily on first use; there is no Windows-specific pinning.
 
-Multithreaded access to the JVM is supported as JavaCall version `0.8.0`, but doesn't work in recent Julia versions.
+For **synchronous** `jcall` / `jnew` / `jfield` on regular tasks (including `Threads.@threads` and `Threads.@spawn` — both sticky and non-sticky), no environment variables are required.
 
-## Windows
+If your code uses **`@async`** to make JNI calls, you should still set `JULIA_COPY_STACKS=1` before starting Julia on Linux/macOS. The env-cache layer fixes the per-thread `JNIEnv*` question, but the underlying HotSpot stack-walking issue that `JULIA_COPY_STACKS` papers over is still real for tasks that yield mid-flight. On Windows, `@async` works without any env var.
 
-Do not set the environmental variable `JULIA_COPY_STACKS` or set the variable to `0`.
-
-To use `jcall` with `@async`, start Julia in the following way:
-
-```
-$ julia -i -e "using JavaCall; JavaCall.init()"
-```
-
-Windows currently lacks support for multithreaded access to the JVM.
-
-## Other Operating Systems
-
-JavaCall has not been tested on operating systems other than macOS, Windows, or Linux.
-You should probably set the environment variable `JULIA_COPY_STACKS = 1` and `JULIA_NUM_THREADS = 1`.
-If you have success using JavaCall on another operating system than listed above,
-please create an issue or pull request to let us know about compatability.
+If you maintain code that targets JavaCall.jl 0.8.x or earlier, see [the legacy threading guide](https://github.com/JuliaInterop/JavaCall.jl/tree/v0.8.1#macos-and-linux) for the older requirements.
