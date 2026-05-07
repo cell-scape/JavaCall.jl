@@ -38,9 +38,11 @@ System_out = jfield(System, "out", @jimport java.io.PrintStream )
 @testset "unsafe_strings_1" begin
     a=JString("how are you")
     @test Ptr(a) != C_NULL
-    @test 11 == JavaCall.JNI.GetStringUTFLength(Ptr(a))
-    b = JavaCall.JNI.GetStringUTFChars(Ptr(a),Ref{JavaCall.JNI.jboolean}())
-    @test unsafe_string(b) == "how are you"
+    JavaCall.with_env() do env
+        @test 11 == JavaCall.JNI.GetStringUTFLength(Ptr(a), env)
+        b = JavaCall.JNI.GetStringUTFChars(Ptr(a), Ref{JavaCall.JNI.jboolean}(), env)
+        @test unsafe_string(b) == "how are you"
+    end
 end
 
 T = @jimport Test
@@ -419,12 +421,16 @@ end
     @test Ptr(mc1) != C_NULL
 
     # Cached entry must be a JNI global ref so it survives PopLocalFrame.
-    @test JavaCall.JNI.GetObjectRefType(Ptr(mc1)) == JavaCall.JNI.JNIGlobalRefType
+    JavaCall.with_env() do env
+        @test JavaCall.JNI.GetObjectRefType(Ptr(mc1), env) == JavaCall.JNI.JNIGlobalRefType
+    end
     jlocalframe(Nothing) do
         nothing
     end
     @test Ptr(JavaCall.metaclass(sym)) == Ptr(mc1)
-    @test JavaCall.JNI.GetObjectRefType(Ptr(mc1)) == JavaCall.JNI.JNIGlobalRefType
+    JavaCall.with_env() do env
+        @test JavaCall.JNI.GetObjectRefType(Ptr(mc1), env) == JavaCall.JNI.JNIGlobalRefType
+    end
 end
 
 @testset "jlocalframe" begin
@@ -492,6 +498,19 @@ end
     end
     @test JavaCall._dispatch_processed_count[] >= initial + 1
     @test !istaskdone(JavaCall._dispatch_task[])
+end
+
+@testset "parallel_jcall" begin
+    if Base.Threads.nthreads() >= 2
+        jlm = @jimport "java.lang.Math"
+        results = Vector{jdouble}(undef, 1000)
+        Threads.@threads for i in 1:1000
+            results[i] = jcall(jlm, "sin", jdouble, (jdouble,), float(i))
+        end
+        @test all(results[i] ≈ sin(float(i)) for i in 1:1000)
+    else
+        @test_skip "parallel_jcall requires JULIA_NUM_THREADS >= 2"
+    end
 end
 
 include("jcall_macro.jl")

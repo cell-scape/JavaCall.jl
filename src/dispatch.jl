@@ -48,11 +48,11 @@ const _dispatch_task = Ref{Task}()
 const _dispatch_processed_count = Base.Threads.Atomic{Int}(0)
 
 function _handle(msg::DeleteRef)
-    with_env() do _env
+    with_env() do env
         if msg.kind === :local
-            JNI.DeleteLocalRef(msg.ptr)
+            JNI.DeleteLocalRef(msg.ptr, env)
         elseif msg.kind === :global
-            JNI.DeleteGlobalRef(msg.ptr)
+            JNI.DeleteGlobalRef(msg.ptr, env)
         end
     end
     Base.Threads.atomic_add!(_dispatch_processed_count, 1)
