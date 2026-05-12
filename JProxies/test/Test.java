@@ -137,4 +137,12 @@ public class Test {
   public String testArrayArgs(Object[] i) {
     return "java.lang.Object[]";
   }
+
+  // --- callback (jproxy) test fixtures ---
+
+  public interface IntSupplierLike { int supply(int x); }
+
+  public static int callSupplier(IntSupplierLike s, int x) { return s.supply(x); }
+
+  public static String runAndReport(Runnable r) { r.run(); return "ran"; }
 }

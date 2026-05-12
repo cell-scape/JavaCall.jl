@@ -2,6 +2,7 @@ using JProxies
 import JProxies: JavaCall
 using Test
 
+JavaCall.addClassPath(@__DIR__)   # picks up the bundled Test.class fixtures
 JProxies.init()
 
 JArrayList = @jimport java.util.ArrayList
@@ -46,4 +47,48 @@ end
 @testset "unwrap smoke test" begin
     @test JProxies.unwrap(JProxy(JArrayList(()))) isa JavaCall.JavaObject
     @test JProxies.unwrap(JProxy(JArrayList)) === JArrayList
+end
+
+# --- jproxy() callback fixtures (hoisted: struct defs need module scope) ---
+mutable struct Doubler
+    calls::Int
+end
+@jproxy Doubler "Test\$IntSupplierLike" begin
+    function supply(self, x::Integer)
+        self.calls += 1
+        return Int32(2x)
+    end
+end
+
+const _flip_flag = Ref(false)
+struct Flip end
+@jproxy Flip "java.lang.Runnable" begin
+    run(self) = (_flip_flag[] = true; nothing)
+end
+
+struct Boom end
+@jproxy Boom "java.lang.Runnable" begin
+    run(self) = error("intentional callback failure")
+end
+
+@testset "jproxy callbacks" begin
+    JTest = @jimport Test
+    JRunnable = @jimport java.lang.Runnable
+
+    # value-returning one-method interface
+    d = Doubler(0)
+    jd = jproxy(d, "Test\$IntSupplierLike")
+    @test JavaCall.jcall(JTest, "callSupplier", JavaCall.jint,
+                (@jimport("Test\$IntSupplierLike"), JavaCall.jint), jd, 21) == 42
+    @test d.calls == 1
+
+    # void Runnable
+    _flip_flag[] = false
+    jr = jproxy(Flip(), "java.lang.Runnable")
+    @test JavaCall.jcall(JTest, "runAndReport", JavaCall.JString, (JRunnable,), jr) == "ran"
+    @test _flip_flag[] == true
+
+    # exception in handler surfaces as a thrown exception on the Java side
+    jb = jproxy(Boom(), "java.lang.Runnable")
+    @test_throws Exception JavaCall.jcall(JTest, "runAndReport", JavaCall.JString, (JRunnable,), jb)
 end
