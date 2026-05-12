@@ -364,6 +364,9 @@ end
     # static overload set: String > Object for a Julia String; exact int for Int32
     @test pt(rc(JTest, "overloaded", "x").member)      == ["java.lang.String"]
     @test pt(rc(JTest, "overloaded", Int32(1)).member) == ["int"]
+    # .paramtypes carries the Julia-side fixed-param types
+    @test rc(JTest, "overloaded", "x").paramtypes == (JString,)
+    @test rc(JTest, "overloaded", Int32(1)).paramtypes == (JavaCall.jint,)
     # numeric widening: Int -> a numeric primitive (we don't promise which)
     @test pt(rc(JMath, "abs", -3).member)[1] in ("int", "long")
     # instance method on an actual object
@@ -374,9 +377,19 @@ end
     @test r.varargs == true
     @test r.vararg_eltype === JavaCall.jint
     @test r.n_fixed == 0
+    @test r.paramtypes == ()   # no fixed params; trailing array excluded
+    # single-arg varargs match still goes through the varargs form
+    @test rc(JTest, "sumVarargs", Int32(1)).varargs == true
     # passing the array directly to a varargs method
     r2 = rc(JTest, "sumVarargs", JavaCall.jint[1,2,3])
     @test r2.varargs == true   # still the varargs member; packing decided at call site
+    # phase-marker comparison: a fixed-arity overload beats a varargs one of the same name
+    @test rc(JTest, "mixed", Int32(5)).varargs == false
+    @test pt(rc(JTest, "mixed", Int32(5)).member) == ["int"]
+    # Julia Char satisfies a Java `char` param
+    @test rc(JTest, "testChar", 'A').paramtypes == (JavaCall.jchar,)
+    @test JavaCall._arg_tier('A', JavaCall.jchar) == 0
+    @test JavaCall._arg_tier(UInt16(65), JavaCall.jchar) in (0, 2)
     # array-parameter overload: Vector{jint} -> int[]  (getName of int[] is "int[]")
     @test pt(rc(JTest, "testArrayArgs", JavaCall.jint[1,2]).member) == ["int[]"]
     # nothing -> null reference param

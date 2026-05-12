@@ -159,4 +159,10 @@ public class Test {
   // Genuinely ambiguous under a conservative (no most-specific) ladder:
   public static String widen(long x)   { return "long"; }
   public static String widen(double x) { return "double"; }
+
+  public static char testChar(char c) { return c; }
+
+  // fixed-arity vs varargs of the same name: fixed must win for one int arg
+  public static String mixed(int x)     { return "fixed"; }
+  public static String mixed(int... xs) { return "varargs"; }
 }
