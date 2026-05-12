@@ -506,6 +506,35 @@ end
     @test is_virtual_thread(current) == false
 end
 
+@testset "with_critical_array" begin
+    # Allocate a Java double[] directly via JNI.NewDoubleArray and populate
+    # it. Using Test.testDoubleArray() would lose the array reference (the
+    # jcall convert_result path copies the contents to a Julia Vector
+    # before returning), defeating the point of with_critical_array.
+    n = 5
+    arr_obj = JavaCall.with_env() do env
+        local_ref = JavaCall.JNI.NewDoubleArray(JavaCall.JNI.jsize(n), env)
+        local_ref == C_NULL && error("NewDoubleArray returned NULL")
+        # Fill with 1.0..5.0
+        src = jdouble[1.0, 2.0, 3.0, 4.0, 5.0]
+        JavaCall.JNI.SetDoubleArrayRegion(local_ref, JavaCall.JNI.jsize(0),
+                                          JavaCall.JNI.jsize(n), src, env)
+        # Wrap as JavaObject so cleanup_arg / finalizer handles it later.
+        JavaObject{Symbol("[D")}(local_ref)
+    end
+
+    sum_via_critical = with_critical_array(arr_obj, jdouble) do view
+        @test length(view) == n
+        @test view[1] == 1.0
+        s = zero(jdouble)
+        @inbounds for x in view
+            s += x
+        end
+        s
+    end
+    @test sum_via_critical == 15.0   # 1+2+3+4+5
+end
+
 @testset "finalizers_release_jvm_memory" begin
     # Allocate many short-lived JStrings, force Julia GC, and verify that
     # the JVM's free heap recovers — i.e. the finalizer's DeleteLocalRef
