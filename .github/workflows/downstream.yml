@@ -1,0 +1,53 @@
+name: Downstream
+# Non-gating smoke tests: run downstream packages' own test suites against this
+# branch of JavaCall, as a tripwire for unintended API breakage. These jobs are
+# allowed to fail (some downstreams need heavy external setup — Spark, Bio-Formats —
+# and may fail for environmental reasons unrelated to JavaCall).
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+jobs:
+  downstream:
+    name: ${{ matrix.package }} (downstream)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 45
+    env:
+      JULIA_NUM_THREADS: '1'
+    strategy:
+      fail-fast: false
+      matrix:
+        package:
+          - JDBC
+          - Spark
+          - BioformatsLoader
+          - Taro
+    steps:
+      - name: Checkout JavaCall
+        uses: actions/checkout@v6
+        with:
+          path: JavaCall.jl
+      - uses: actions/setup-java@v5
+        with:
+          distribution: 'zulu'
+          java-version: '25'
+      - uses: julia-actions/setup-julia@v3
+        with:
+          version: '1'
+      - uses: julia-actions/cache@v2
+      - name: Test downstream package against this JavaCall
+        shell: julia --color=yes {0}
+        env:
+          DOWNSTREAM_PKG: ${{ matrix.package }}
+        run: |
+          using Pkg
+          pkg = ENV["DOWNSTREAM_PKG"]
+          Pkg.activate(; temp = true)
+          # Clone the downstream package at its registered repo's default branch.
+          Pkg.develop(pkg)
+          # Override the registered JavaCall with this checkout.
+          Pkg.develop(PackageSpec(path = joinpath(pwd(), "JavaCall.jl")))
+          Pkg.instantiate()
+          Pkg.test(pkg)
