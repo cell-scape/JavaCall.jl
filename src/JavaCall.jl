@@ -15,7 +15,8 @@ export JavaObject, JavaMetaClass, JNIVector,
        getname, getclass, listmethods, getreturntype, getparametertypes, classforname,
        listfields, gettype,
        narrow,
-       is_virtual_thread
+       is_virtual_thread,
+       with_critical_array
 
 # using Compat, Compat.Dates
 
@@ -40,6 +41,7 @@ include("core.jl")
 include("convert.jl")
 include("reflect.jl")
 include("jniarray.jl")
+include("buffer.jl")
 include("jcall_macro.jl")
 
 Base.@deprecate_binding jnifunc JavaCall.JNI.jniref[]
