@@ -12,7 +12,7 @@ export JavaObject, JavaMetaClass, JNIVector,
        JObject, JClass, JMethod, JConstructor, JField, JString,
        JavaRef, JavaLocalRef, JavaGlobalRef, JavaNullRef,
        @jimport, @jcall, jcall, jfield, jlocalframe, isnull,
-       getname, getclass, listmethods, getreturntype, getparametertypes, classforname,
+       getname, getclass, listmethods, listconstructors, getreturntype, getparametertypes, classforname,
        listfields, gettype,
        narrow,
        is_virtual_thread,
@@ -41,6 +41,7 @@ include("dispatch.jl")
 include("core.jl")
 include("convert.jl")
 include("reflect.jl")
+include("overload.jl")
 include("jniarray.jl")
 include("buffer.jl")
 include("jcall_macro.jl")

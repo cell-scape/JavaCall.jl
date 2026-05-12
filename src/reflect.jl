@@ -104,6 +104,17 @@ end
 
 
 """
+    listconstructors(c) -> Vector{JConstructor}
+
+The public constructors of the class denoted by `c` (a [`JClass`](@ref), a
+`JavaObject{T}` instance, or a `Type{JavaObject{T}}`). Mirrors [`listmethods`](@ref);
+used by the overload resolver for `jnew`.
+"""
+listconstructors(cls::JClass) = jcall(cls, "getConstructors", Vector{JConstructor}, ())
+listconstructors(::Type{JavaObject{C}}) where {C} = listconstructors(classforname(string(C)))
+listconstructors(obj::JavaObject) = listconstructors(getclass(obj))
+
+"""
 ```
 listmethods(obj::JavaObject, name::AbstractString)
 ```
@@ -182,6 +193,11 @@ function Base.show(io::IO, method::JMethod)
     argtypes = [getname(c) for c in getparametertypes(method)]
     argtypestr = join(argtypes, ", ")
     print(io, "$rettype $name($argtypestr)")
+end
+
+function Base.show(io::IO, ctor::JConstructor)
+    ptypes = [getname(c) for c in getparametertypes(ctor)]
+    print(io, "<init>(", join(ptypes, ", "), ")")
 end
 
 function Base.show(io::IO, field::JField)
