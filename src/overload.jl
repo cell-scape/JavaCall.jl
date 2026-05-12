@@ -7,13 +7,17 @@
     ResolvedCall
 
 The outcome of [`resolve_call`](@ref): the chosen Java `member` (a [`JMethod`](@ref)
-or `JConstructor`), the Julia return type `rettype` (`Nothing` for `void`; unused
-for constructors), and varargs info — `varargs` is true when the match used the
-member's `T...` form, in which case `n_fixed` is the number of leading fixed
-parameters and `vararg_eltype` is the Julia element type of the trailing array.
+or `JConstructor`), `paramtypes` (the Julia-side types of the *fixed* parameters —
+for a non-varargs match that's every parameter; for a varargs match it's the
+leading fixed ones, excluding the trailing array parameter), the Julia return type
+`rettype` (`Nothing` for `void`; unused for constructors), and varargs info —
+`varargs` is true when the match used the member's `T...` form, in which case
+`n_fixed` is the number of leading fixed parameters and `vararg_eltype` is the
+Julia element type of the trailing array.
 """
 struct ResolvedCall
-    member::JavaObject          # JMethod or JConstructor (both are JavaObject aliases)
+    member::Union{JMethod, JConstructor}
+    paramtypes::Tuple
     rettype::Type
     varargs::Bool
     n_fixed::Int
@@ -54,7 +58,6 @@ _candidates(receiver, name::Symbol) = name === _CONSTRUCTOR ? listconstructors(r
 _param_jtypes(member) = Type[jimport(c) for c in getparametertypes(member)]
 _ret_jtype(member::JMethod) = jimport(getreturntype(member))
 _ret_jtype(::JConstructor) = Nothing
-_ret_jtype(::Any) = Nothing
 _is_varargs(member) =
     try
         jcall(member, "isVarArgs", jboolean, ()) == 0x01
@@ -64,9 +67,13 @@ _is_varargs(member) =
 
 # --- scoring ladder --------------------------------------------------------
 
-# Tiers: lower is better. 3 is the *summarizing* tier for a varargs match (so any
-# fixed-arity match beats any varargs match, mirroring Java). 4 = nothing->null.
-const _T_EXACT, _T_ASSIGN, _T_IMPLICIT, _T_VARARG, _T_NULL, _T_REJECT = 0, 1, 2, 3, 4, 5
+# Per-argument match tiers: lower is better. The per-candidate score is a *tier
+# vector* whose position 0 is a phase marker (0 = fixed-arity match, 1 = varargs
+# match) so any fixed-arity match lexicographically beats any varargs match
+# (mirroring Java); the remaining entries are the per-argument tiers below.
+# Differing-arity vectors are padded to equal length with `_T_REJECT + 1` (worse
+# than any real tier) before comparison, so identical vectors register as a tie.
+const _T_EXACT, _T_ASSIGN, _T_IMPLICIT, _T_NULL, _T_REJECT = 0, 1, 2, 3, 4
 
 _classname(::Type{JavaObject{S}}) where {S} = String(S)
 _classname(::Type{<:AbstractVector}) = ""          # arrays handled before this is called
@@ -82,6 +89,10 @@ function _arg_tier(arg, ptype::Type)
     # primitives
     if ptype === jboolean
         return arg isa Bool ? _T_EXACT : _T_REJECT
+    elseif ptype === jchar                                      # char (Julia Char is the natural analog)
+        arg isa jchar && return _T_EXACT
+        arg isa Char && return _T_EXACT
+        return (arg isa Integer && !(arg isa Bool) && typemin(jchar) <= arg <= typemax(jchar)) ? _T_IMPLICIT : _T_REJECT
     elseif ptype <: Union{jbyte,jchar,jshort,jint,jlong}        # integer primitives
         arg isa Bool && return _T_REJECT
         arg isa Integer || return _T_REJECT
@@ -117,6 +128,9 @@ function _arg_tier(arg, ptype::Type)
             return _T_REJECT
         elseif arg isa Bool
             pn in ("java.lang.Boolean", "java.lang.Object") && return _T_IMPLICIT
+            return _T_REJECT
+        elseif arg isa Char
+            pn in ("java.lang.Character", "java.lang.Object") && return _T_IMPLICIT
             return _T_REJECT
         elseif arg isa Integer
             pn in ("java.lang.Long", "java.lang.Integer", "java.lang.Short", "java.lang.Byte", "java.lang.Number", "java.lang.Object") && return _T_IMPLICIT
@@ -215,5 +229,7 @@ function _resolve_call_uncached(receiver, name, args)
         throw(JavaCallError("jcall: ambiguous call `$(_membername(name))` on $(_subject_name(receiver)) with $(map(typeof, args)) — $(length(ties)) overloads match equally well: $(join(string.(t[2] for t in ties), "; ")). Use the explicit jcall form to disambiguate."))
     end
     (_, member, isva, nfix, veltype) = scored[1]
-    return ResolvedCall(member, _ret_jtype(member), isva, nfix, veltype)
+    pj = _param_jtypes(member)
+    paramtypes = Tuple(isva ? pj[1:end-1] : pj)
+    return ResolvedCall(member, paramtypes, _ret_jtype(member), isva, nfix, veltype)
 end
