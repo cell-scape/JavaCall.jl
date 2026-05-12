@@ -36,7 +36,7 @@ Sentinel that ends the drain loop. Posted by `stop_dispatch_task!`.
 struct Shutdown <: DispatchMsg end
 
 """
-    Callback(handler, args, result_box) <: DispatchMsg
+    Callback(handler, args, result_box)
 
 Run `handler(args...)` on the dispatch task's known-good (JVM-attached) OS thread
 and deliver the result — or the exception, if it throws — by `put!`ing it into
