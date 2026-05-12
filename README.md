@@ -48,6 +48,55 @@ julia> jcall(out, "println", Nothing, (JString,), "Hello World")
 Hello World
 ```
 
+## JProxies — ergonomic Java objects and Julia callbacks
+
+`JProxies` is a companion package shipped in this repository under `JProxies/` (it
+has its own `Project.toml` and is not part of the `JavaCall` API). Add it with
+`Pkg.develop(path="path/to/JavaCall.jl/JProxies")`.
+
+**Dot-access with overload resolution:**
+
+```julia
+using JProxies
+JProxies.init()                       # forwards to JavaCall.init()
+
+a = JProxy(@jimport(java.util.ArrayList)(()))
+a.add("one"); a.add("two")
+a.size()                              # 2
+a.get(0)                              # "one"
+
+JProxy(@jimport java.lang.Math).sin(0.0)          # static methods via the class
+JProxy(@jimport java.lang.Integer).MAX_VALUE      # static field read
+unwrap(a)                             # the raw JavaObject, for low-level jcall
+```
+
+`jp.method(args...)` resolves the best Java overload for the Julia argument types
+(exact > subclass > boxing/widening; ambiguous ties throw) and returns the result
+`narrow`ed to its runtime class. `jp.field` reads a field. **Field writes are not
+supported** — `jp.field = v` throws; use the low-level field setter for that.
+
+**Implementing a Java interface in Julia:**
+
+```julia
+mutable struct Counter; n::Int; end
+@jproxy Counter "java.lang.Runnable" begin
+    run(self) = (self.n += 1; nothing)
+end
+c = Counter(0)
+r = jproxy(c, "java.lang.Runnable")   # pass `r` wherever Java expects a Runnable
+```
+
+`@jproxy` lowers to plain table assignments — no runtime `eval`, so it is
+precompile-friendly. Callbacks execute on JavaCall's dispatch task (a known
+JVM-attached thread), which is the supported single-OS-thread configuration
+(`JULIA_NUM_THREADS=1`). Inside a handler, primitive arguments, `String`, and the
+boxed wrapper types arrive as Julia values; any other object argument is delivered
+as a raw `JavaObject` (not narrowed) — `convert`/`narrow` it yourself if needed.
+
+**Removed in this release:** the `@class` macro, `staticproxy`, `interfacehas`,
+and implicit `String`↔`JString` / `Vector`↔`JList` widening. Use explicit
+`convert` and the low-level `jcall` for those cases.
+
 ## Julia version compatibility
 
 JavaCall.jl 0.9 requires Julia 1.12 or newer. CI tests Julia 1.12 (`min`), Julia LTS, and the latest stable release. For older Julia versions, use JavaCall.jl 0.8.x.
