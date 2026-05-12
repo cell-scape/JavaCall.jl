@@ -588,6 +588,22 @@ end
 
 include("jcall_macro.jl")
 
+@testset "dispatch Callback message" begin
+    box = Channel{Any}(1)
+    push!(JavaCall._dispatch_channel, JavaCall.Callback(() -> 6 * 7, (), box))
+    @test take!(box) == 42
+
+    box2 = Channel{Any}(1)
+    push!(JavaCall._dispatch_channel, JavaCall.Callback(() -> error("boom"), (), box2))
+    r = take!(box2)
+    @test r isa Exception
+
+    # dispatch task still alive
+    box3 = Channel{Any}(1)
+    push!(JavaCall._dispatch_channel, JavaCall.Callback(() -> :ok, (), box3))
+    @test take!(box3) === :ok
+end
+
 end
 
 # Test downstream dependencies

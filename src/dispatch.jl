@@ -35,6 +35,24 @@ Sentinel that ends the drain loop. Posted by `stop_dispatch_task!`.
 """
 struct Shutdown <: DispatchMsg end
 
+"""
+    Callback(handler, args, result_box) <: DispatchMsg
+
+Run `handler(args...)` on the dispatch task's known-good (JVM-attached) OS thread
+and deliver the result — or the exception, if it throws — by `put!`ing it into
+`result_box::Channel{Any}`. Used by JProxies to execute Julia callbacks invoked
+from Java on a thread that is guaranteed to have a valid `JNIEnv*`.
+
+The poster is expected to `take!(result_box)` exactly once. If the handler throws,
+the exception object itself is put into the box; the poster decides whether to
+rethrow.
+"""
+struct Callback <: DispatchMsg
+    handler
+    args::Tuple
+    result_box::Channel{Any}
+end
+
 # Effectively unbounded — Julia Channels with sz_max=typemax(Int) only
 # allocate as items arrive. Bounded sizes turned out unworkable for the
 # finalizer-routing path: Julia's `push!`/`put!` block on a full
@@ -60,6 +78,17 @@ function _handle(msg::DeleteRef)
 end
 
 _handle(msg::Shutdown) = nothing
+
+function _handle(msg::Callback)
+    result = try
+        Base.invokelatest(msg.handler, msg.args...)
+    catch err
+        @error "JProxies callback handler threw" exception=(err, catch_backtrace())
+        err
+    end
+    put!(msg.result_box, result)
+    return nothing
+end
 
 function _drain_loop()
     while true
