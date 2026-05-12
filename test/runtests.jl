@@ -589,6 +589,8 @@ end
 include("jcall_macro.jl")
 
 @testset "dispatch Callback message" begin
+    @test !istaskdone(JavaCall._dispatch_task[])
+
     box = Channel{Any}(1)
     push!(JavaCall._dispatch_channel, JavaCall.Callback(() -> 6 * 7, (), box))
     @test take!(box) == 42
@@ -599,6 +601,7 @@ include("jcall_macro.jl")
     @test r isa Exception
 
     # dispatch task still alive
+    @test !istaskdone(JavaCall._dispatch_task[])
     box3 = Channel{Any}(1)
     push!(JavaCall._dispatch_channel, JavaCall.Callback(() -> :ok, (), box3))
     @test take!(box3) === :ok
