@@ -4,7 +4,7 @@ import JavaCall: JavaCall, JNI,
         JavaObject, JavaMetaClass, JavaLocalRef,
         JString, JObject, JClass, JMethod, JConstructor, JField,
         jint, jlong, jbyte, jboolean, jchar, jshort, jfloat, jdouble, jvoid,
-        @jimport, jcall, jnew, jfield, isnull,
+        @jimport, jcall, jnew, jfield, isnull, unsafe_string,
         getname, getclass, listmethods, listfields, getreturntype, getparametertypes,
         gettype, classforname, narrow, metaclass
 
