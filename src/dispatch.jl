@@ -4,15 +4,14 @@
 A single sticky task in the `:interactive` pool that owns one OS thread,
 pre-attached to the JVM. The dispatch task drains a `Channel{DispatchMsg}`
 and executes each message on its attached thread. This guarantees that
-finalization (and, in Phase 2C, callbacks) always runs on a known-good
-JNI context regardless of which Julia task or thread originated the
-message.
+finalization and Java→Julia callbacks (`Callback`, used by the JProxies
+subpackage) always run on a known-good JNI context regardless of which
+Julia task or thread originated the message.
 
-This branch (Phase 2A milestone 3) introduces the message types,
-the lifecycle, and a working drain loop. Real workloads are not
-yet routed through it — `deleteref` still calls JNI directly until
-milestone 6, which replaces the direct JNI call with a channel
-post.
+Note: `deleteref` (in `core.jl`) deliberately calls JNI directly rather
+than posting `DeleteRef` here — see the comment there for why. `DeleteRef`
+remains available for callers that do want to route ref cleanup through
+this task.
 """
 
 abstract type DispatchMsg end
