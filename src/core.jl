@@ -452,6 +452,26 @@ function jnew(T::Symbol, argtypes::Tuple = (), args...)
     end
 end
 
+"""
+    jnew(T::Type{<:JavaObject}, args...)
+
+Resolved-overload form of [`jnew`](@ref): constructs a `T` by picking the
+constructor that best matches the Julia types of `args` — see [`resolve_call`](@ref)
+— and delegating to the explicit `T(argtypes::Tuple, args...)` machinery. Java
+varargs constructors are spread automatically. Throws `JavaCallError` on an
+ambiguous match or no match. For a pinned constructor use
+`T((ArgTypes...,), args...)` / `jnew(:fqn, (ArgTypes...,), args...)`.
+"""
+function jnew(::Type{JavaObject{T}}, args...) where {T}
+    assertloaded()
+    r = resolve_call(JavaObject{T}, _CONSTRUCTOR, args)
+    callargs = r.varargs ? _pack_varargs(r, args) : args
+    # The fixed param types, plus the trailing Vector{eltype} for a varargs ctor —
+    # matching the shape of `callargs`.
+    paramtypes = r.varargs ? (r.paramtypes..., Vector{r.vararg_eltype}) : r.paramtypes
+    return jnew(T, paramtypes, callargs...)
+end
+
 _jcallable(typ::Type{JavaObject{T}}) where T = metaclass(T)
 function _jcallable(obj::JavaObject)
     isnull(obj) && throw(JavaCallError("Attempt to call method on Java NULL"))
@@ -486,6 +506,62 @@ function jcall(ref, method::JMethod, args...)
         argtypes = Tuple(jimport.(getparametertypes(method)))
         _jcall(env, _jcallable(ref), jmethodId, rettype, argtypes, args...)
     end
+end
+
+"""
+    jcall(receiver, method::AbstractString, args...)
+
+Resolved-overload form of [`jcall`](@ref): picks the Java overload of `method` on
+`receiver` (a [`JavaObject`](@ref) instance, or a `@jimport`ed `JavaObject{T}`
+*type* for a static method) that best matches the Julia types of `args` — see
+[`resolve_call`](@ref) — dispatches it, and post-processes the result: `void` →
+`nothing`; a `java.lang.String` return → a Julia `String` (a `null` String as
+`""`, matching JavaCall's existing behavior); any other object return →
+[`narrow`](@ref)ed to its runtime class; primitives unchanged. Java varargs are
+spread automatically (pass a single `AbstractVector` to forward an array
+directly). Throws `JavaCallError` on an
+ambiguous match or no match. For a pinned overload / return type, or in a hot loop,
+use the explicit `jcall(receiver, method, RetType, (ArgTypes...,), args...)` form.
+"""
+function jcall(receiver, method::AbstractString, args...)
+    assertloaded()
+    r = resolve_call(receiver, method, args)
+    callargs = r.varargs ? _pack_varargs(r, args) : args
+    result = jcall(receiver, r.member::JMethod, callargs...)   # reuse the existing JMethod-dispatch path
+    return _resolved_result(r.rettype, result)
+end
+
+# Pack the trailing args of a varargs call into a Vector of the declared element
+# type. If the caller already passed a single trailing AbstractVector, forward it
+# as-is rather than double-wrapping. Empty varargs → an empty Vector{eltype}.
+function _pack_varargs(r, args)
+    fixed = args[1:r.n_fixed]
+    rest  = args[(r.n_fixed + 1):end]
+    arr = if length(rest) == 1 && rest[1] isa AbstractVector
+        rest[1]
+    elseif isempty(rest)
+        r.vararg_eltype[]
+    else
+        collect(r.vararg_eltype, rest)
+    end
+    return (fixed..., arr)
+end
+
+# Post-process a resolved call's result for the ergonomic form. The
+# `jcall(_, ::JMethod, _...)` path already decodes a *declared* `java.lang.String`
+# return to a Julia `String` (a `null` String surfaces as `""`, matching JavaCall's
+# existing behavior). For other object returns we [`narrow`](@ref) to the runtime
+# class and, if that runtime class is `java.lang.String`, decode it too (so e.g.
+# `List.get` — declared `Object` — yields a Julia `String` when it actually holds
+# one). `void` → `nothing`; primitives pass through unchanged.
+function _resolved_result(rettype::Type, x)
+    rettype === Nothing && return nothing
+    rettype === JString && return x                # already a Julia String
+    if rettype <: JavaObject
+        n = narrow(x)
+        return n isa JString ? (isnull(n) ? "" : unsafe_string(n)) : n
+    end
+    return x
 end
 
 function get_method_id(env::Ptr{JNI.JNIEnv}, typ::Type{JavaObject{T}}, method::AbstractString, rettype::Type, argtypes::Tuple) where T

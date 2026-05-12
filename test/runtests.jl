@@ -402,6 +402,66 @@ end
     @test rc(JTest, "testInt", Int32(3)).member === rc(JTest, "testInt", Int32(3)).member
 end
 
+@testset "Phase 3: jcall resolved form" begin
+    JTest = @jimport Test
+    JArrayList = @jimport java.util.ArrayList
+    JMath = @jimport java.lang.Math
+    JSystem = @jimport java.lang.System
+
+    # static, exact + widening
+    @test jcall(JMath, "abs", Int32(-3)) == 3
+    @test jcall(JTest, "testInt", 7) == 7                      # Int -> int (in range)
+    @test jcall(JTest, "testString", "hi") == "hi"             # String return -> Julia String
+    @test jcall(JTest, "testString", "hi") isa String
+    # static overload selection
+    @test jcall(JTest, "overloaded", "x")      == "String"
+    @test jcall(JTest, "overloaded", Int32(1)) == "int"
+    # mixed: a fixed-arity overload wins over the varargs one
+    @test jcall(JTest, "mixed", Int32(5)) == "fixed"
+    @test jcall(JTest, "mixed", Int32(1), Int32(2)) == "varargs"
+    # instance methods on a live ArrayList
+    al = JArrayList((),)
+    @test jcall(al, "add", "one") == true
+    @test jcall(al, "size") == 1
+    @test jcall(al, "get", 0) == "one"                         # narrowed -> Julia String
+    @test jcall(al, "isEmpty") == false
+    # static with a system property (String return)
+    @test jcall(JSystem, "getProperty", "java.version") isa AbstractString
+    # varargs: spread, empty, and array-direct forms
+    @test jcall(JTest, "sumVarargs", 1, 2, 3, 4) == 10
+    @test jcall(JTest, "sumVarargs") == 0
+    @test jcall(JTest, "sumVarargs", JavaCall.jint[5, 6]) == 11
+    @test jcall(JTest, "joinVarargs", "-", "a", "b", "c") == "a-b-c"
+    @test jcall(JTest, "joinVarargs", "-") == ""
+    # nothing -> null: testString returns its argument; a null String return -> "" (existing JavaCall contract)
+    @test jcall(JTest, "testString", nothing) == ""
+    # ambiguity & no-match throw JavaCallError
+    @test_throws JavaCall.JavaCallError jcall(JTest, "widen", Int32(3))
+    @test_throws JavaCall.JavaCallError jcall(al, "add", 1, 2, 3)
+    # explicit form unchanged (regression)
+    @test jcall(JTest, "testInt", jint, (jint,), Int32(9)) == 9
+    @test jcall(al, "size", jint, ()) == 1
+end
+
+@testset "Phase 3: jnew resolved form" begin
+    JArrayList = @jimport java.util.ArrayList
+    a = JavaCall.jnew(JArrayList)
+    @test a isa JavaObject
+    @test jcall(a, "size") == 0
+    b = JavaCall.jnew(JArrayList, 16)                       # ArrayList(int initialCapacity)
+    @test b isa JavaObject
+    @test jcall(b, "size") == 0
+    jcall(a, "add", "x")
+    c = JavaCall.jnew(JArrayList, a)                        # ArrayList(Collection)
+    @test jcall(c, "size") == 1
+    @test jcall(c, "get", 0) == "x"
+    # explicit form unchanged (regression)
+    @test JArrayList((jint,), 8) isa JavaObject
+    @test JArrayList((),) isa JavaObject
+    # ambiguity / no-match throw JavaCallError
+    @test_throws JavaCall.JavaCallError JavaCall.jnew(JArrayList, "not a valid ctor arg shape", 1, 2)
+end
+
 #Test for double free bug, #20
 #Fix in #28. The following lines will segfault without the fix
 @testset "double_free_1" begin
