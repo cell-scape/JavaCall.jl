@@ -137,4 +137,26 @@ public class Test {
   public String testArrayArgs(Object[] i) {
     return "java.lang.Object[]";
   }
+
+  // --- Phase 3 overload-resolution fixtures ---
+
+  public static int sumVarargs(int... xs) {
+    int s = 0;
+    for (int x : xs) s += x;
+    return s;
+  }
+
+  public static String joinVarargs(String sep, Object... parts) {
+    StringBuilder b = new StringBuilder();
+    for (int i = 0; i < parts.length; i++) { if (i > 0) b.append(sep); b.append(parts[i]); }
+    return b.toString();
+  }
+
+  public static String overloaded(int x)    { return "int"; }
+  public static String overloaded(String x) { return "String"; }
+  public static String overloaded(Object x) { return "Object"; }
+
+  // Genuinely ambiguous under a conservative (no most-specific) ladder:
+  public static String widen(long x)   { return "long"; }
+  public static String widen(double x) { return "double"; }
 }

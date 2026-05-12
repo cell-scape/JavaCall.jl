@@ -337,6 +337,58 @@ end
     @test findfirst(n->n==["java.lang.String", "int"], z) != nothing
 end
 
+@testset "Phase 3: listconstructors" begin
+    JArrayList = @jimport java.util.ArrayList
+    ctors = listconstructors(JArrayList)
+    @test ctors isa Vector
+    @test !isempty(ctors)
+    @test eltype(ctors) <: JavaObject   # JConstructor === JavaObject{Symbol("java.lang.reflect.Constructor")}
+    # at least one no-arg and one int-arg ctor:
+    nparams = [length(getparametertypes(c)) for c in ctors]
+    @test 0 in nparams
+    @test 1 in nparams
+    # show works
+    @test occursin("<init>", sprint(show, first(ctors)))
+end
+
+@testset "Phase 3: resolve_call" begin
+    JTest = @jimport Test
+    JArrayList = @jimport java.util.ArrayList
+    JMath = @jimport java.lang.Math
+    rc(recv, name, args...) = JavaCall.resolve_call(recv, name, args)
+    pn(c) = JavaCall.getname(c)
+    pt(m) = String[pn(c) for c in JavaCall.getparametertypes(m)]
+
+    # exact primitive return-type pulled from reflection
+    @test pn(JavaCall.getreturntype(rc(JTest, "testInt", Int32(3)).member)) == "int"
+    # static overload set: String > Object for a Julia String; exact int for Int32
+    @test pt(rc(JTest, "overloaded", "x").member)      == ["java.lang.String"]
+    @test pt(rc(JTest, "overloaded", Int32(1)).member) == ["int"]
+    # numeric widening: Int -> a numeric primitive (we don't promise which)
+    @test pt(rc(JMath, "abs", -3).member)[1] in ("int", "long")
+    # instance method on an actual object
+    al = JArrayList((),)                                # explicit empty-ctor
+    @test pt(rc(al, "add", "one").member) == ["java.lang.Object"]
+    # varargs: sumVarargs(int...) — member is the varargs method, marked varargs
+    r = rc(JTest, "sumVarargs", Int32(1), Int32(2), Int32(3))
+    @test r.varargs == true
+    @test r.vararg_eltype === JavaCall.jint
+    @test r.n_fixed == 0
+    # passing the array directly to a varargs method
+    r2 = rc(JTest, "sumVarargs", JavaCall.jint[1,2,3])
+    @test r2.varargs == true   # still the varargs member; packing decided at call site
+    # array-parameter overload: Vector{jint} -> int[]  (getName of int[] is "int[]")
+    @test pt(rc(JTest, "testArrayArgs", JavaCall.jint[1,2]).member) == ["int[]"]
+    # nothing -> null reference param
+    @test pt(rc(JTest, "testString", nothing).member) == ["java.lang.String"]
+    # ambiguity: widen(long) vs widen(double) with an Int32 -> both implicit -> throw
+    @test_throws JavaCall.JavaCallError rc(JTest, "widen", Int32(3))
+    # no match
+    @test_throws JavaCall.JavaCallError rc(al, "add", 1, 2, 3)
+    # cache returns the same ResolvedCall member object
+    @test rc(JTest, "testInt", Int32(3)).member === rc(JTest, "testInt", Int32(3)).member
+end
+
 #Test for double free bug, #20
 #Fix in #28. The following lines will segfault without the fix
 @testset "double_free_1" begin
