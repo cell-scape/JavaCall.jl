@@ -1,4 +1,9 @@
 
+"""
+    getclass(obj::JavaObject) -> JClass
+
+Return the runtime class of `obj` (Java's `obj.getClass()`) as a [`JClass`](@ref).
+"""
 function getclass(obj::JavaObject)
     jcall(obj, "getClass", JClass, ())
 end
@@ -65,6 +70,9 @@ function getname(method::JMethod)
 end
 
 """
+    getname(field::JField) -> String
+
+Return the name of the reflected Java field.
 """
 getname(field::JField) = jcall(field, "getName", JString, ())
 

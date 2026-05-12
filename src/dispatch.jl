@@ -106,8 +106,8 @@ end
 """
     start_dispatch_task!()
 
-Spawn the dispatch task. Called from `JavaCall.__init__` after the JVM
-is initialized. The task is sticky (`t.sticky = true`) so it stays on
+Spawn the dispatch task. Called from `JavaCall.init` (via `_init`) right after
+the JVM is initialized. The task is sticky (`t.sticky = true`) so it stays on
 its OS thread for the JVM's lifetime, keeping the daemon attachment
 valid throughout.
 """

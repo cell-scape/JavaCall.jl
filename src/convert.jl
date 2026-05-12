@@ -42,7 +42,15 @@ function convert(::Type{JavaObject{T}}, obj::JavaObject{S}) where {T,S}
     end
 end
 
-#Is java type convertible from S to T.
+"""
+    isConvertible(T, S) -> Bool
+    isConvertible(env, T, S) -> Bool
+
+True if a Java reference of class `S` is assignable to class `T` (i.e. `S` is `T`
+or a subtype/implementer of it), via JNI's `IsAssignableFrom`. `S` may be a
+class-name `Symbol`, a `JavaObject`, or a raw `jclass` pointer; `T` is a class-name
+`Symbol`. Used by [`narrow`](@ref) / `convert` to validate casts.
+"""
 isConvertible(env::Ptr{JNI.JNIEnv}, T, S) = JNI.IsAssignableFrom(Ptr(metaclass(env, S)), Ptr(metaclass(env, T)), env) == JNI_TRUE
 isConvertible(env::Ptr{JNI.JNIEnv}, T, S::Ptr{Nothing}) = JNI.IsAssignableFrom(S, Ptr(metaclass(env, T)), env) == JNI_TRUE
 # Backwards-compat forms: obtain env on demand
@@ -359,9 +367,13 @@ end
 iterator(obj::JavaObject) = jcall(obj, "iterator", @jimport(java.util.Iterator), ())
 
 """
-Given a `JavaObject{T}` narrows down `T` to a real class of the underlying object.
-For example, `JavaObject{:java.lang.Object}` pointing to `java.lang.String`
-will be narrowed down to `JavaObject{:java.lang.String}`
+    narrow(obj::JavaObject) -> JavaObject
+
+Re-tag `obj` with its *runtime* class: queries `obj.getClass().getName()` and
+returns a `JavaObject{T}` whose `T` is that class. E.g. a
+`JavaObject{Symbol("java.lang.Object")}` that actually points at a `String` comes
+back as `JavaObject{Symbol("java.lang.String")}`. Used to give `jcall` results a
+useful concrete type (and applied automatically when iterating a `JavaObject`).
 """
 function narrow(obj::JavaObject)
     c = jcall(obj,"getClass", @jimport(java.lang.Class), ())

@@ -23,6 +23,15 @@ end
 
 @static Sys.isunix() ? (global const libname = "libjvm") : (global const libname = "jvm")
 
+"""
+    findjvm() -> Tuple
+
+Locate the JVM shared library (`libjvm.{so,dylib,dll}`). Checks `JAVA_HOME`, then
+`which java` (following symlinks), `/usr/libexec/java_home`, and well-known
+directories, trying both JDK 8 and JDK 9+ layouts for the current OS/arch. Returns
+a 1-tuple `(libpath,)`, or `(msvcr_dll, libpath)` on Windows. Throws
+`JavaCallError` if nothing is found.
+"""
 function findjvm()
     javahomes = Any[]
     libpaths = Any[]
@@ -228,27 +237,39 @@ function addOpts(s::String)
     end
 end
 
+"""
+    JavaCall.isloaded() -> Bool
+
+True once the JVM has been initialized (via [`init`](@ref) / [`init_current_vm`](@ref))
+and a `JNIEnv*` is available.
+"""
 isloaded() = JNI.is_jni_loaded() && JNI.is_env_loaded()
 
+"""
+    JavaCall.assertloaded()
+
+Throw `JavaCallError` unless the JVM is loaded. Called at the entry of every
+[`jcall`](@ref), [`jnew`](@ref) and [`jfield`](@ref).
+"""
 assertloaded() = isloaded() ? true : throw(JavaCallError("JVM not initialised. Please run init()"))
 assertnotloaded() = isloaded() ? throw(JavaCallError("JVM already initialised")) : true
 
 """
     JavaCall.init(opts::Array{String,1})
-    JavaCall.init(opt1::String,opt2::String, ...)
+    JavaCall.init(opt1::String, opt2::String, ...)
     JavaCall.init()
 
-    Initialize JavaCall with JVM options.
+Start the embedded JVM with the given options, then spawn the dispatch task (see
+`src/dispatch.jl`). Only one JVM can exist per process. **Call `init()` after all
+[`addClassPath`](@ref) / [`addOpts`](@ref) calls** — options passed here are
+appended to those, and once `init()` has run `addClassPath`/`addOpts` have no
+effect.
 
-    As of JavaCall v0.7.4 new options passed to init will be appended
-    to previous options added with addClasspath and addOpts.
+See http://juliainterop.github.io/JavaCall.jl/methods.html
 
-    Once init() is called, addClasspath and addOpts no longer have any effect.
+# Example
 
-    See http://juliainterop.github.io/JavaCall.jl/methods.html
-
-    Example
-    JavaCall.init(["-Xmx512M", "-Djava.class.path=$(@__DIR__)", "-verbose:jni", "-verbose:gc"])
+    JavaCall.init(["-Xmx512M", "-Djava.class.path=\$(@__DIR__)", "-verbose:jni", "-verbose:gc"])
 """
 function init(opts::Array{String,1})
     addOpts.(opts)
@@ -323,6 +344,13 @@ function init_current_vm()
     JNI.init_current_vm(findjvm())
 end
 
+"""
+    JavaCall.destroy()
+
+Shut down the embedded JVM: stop the dispatch task (draining pending messages),
+then call `DestroyJavaVM`. The JVM cannot be re-initialized in the same process
+afterwards.
+"""
 function destroy()
     stop_dispatch_task!()
     JNI.destroy()
