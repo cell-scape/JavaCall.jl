@@ -10,7 +10,7 @@ import JavaCall: JavaCall, JNI,
 
 import Base: getproperty, setproperty!, convert, show
 
-export JProxy, @jimport, unwrap          # jproxy, @jproxy added in M3
+export JProxy, jproxy, @jproxy, @jimport, unwrap
 
 const _classdir = abspath(joinpath(@__DIR__, "..", "java"))
 
@@ -33,7 +33,7 @@ function init(args...)
 end
 
 include("dotaccess.jl")
-# include("native.jl")           # M3
-# include("callbacks.jl")        # M3
+include("native.jl")
+include("callbacks.jl")
 
 end # module
