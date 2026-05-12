@@ -52,7 +52,7 @@ function _juliafy(x)
     x isa JavaObject || return x
     isnull(x) && return nothing
     n = x isa JString ? x : narrow(x)
-    n isa JString && return JavaCall.unsafe_string(n)
+    n isa JString && return unsafe_string(n)
     cn = string(typeof(n).parameters[1])
     haskey(_UNBOX_BY_NAME, cn) && return convert(_UNBOX_BY_NAME[cn], n)
     return n
@@ -62,9 +62,10 @@ function getproperty(jp::JProxy, name::Symbol)
     w = unwrap(jp)
     flds = listfields(w, String(name))
     if !isempty(flds)
-        # jfield(ref, field::AbstractString) auto-detects the field type and
-        # works for both instance objects and Type{JavaObject{T}} (static).
-        return _juliafy(jfield(w, String(name)))
+        # Pass the already-reflected JField to jfield to avoid a second
+        # getFields() round-trip; jfield(ref, ::JField) auto-detects the field
+        # type and works for both instance objects and Type{JavaObject{T}}.
+        return _juliafy(jfield(w, flds[1]))
     end
     return JProxyMethod{typeof(jp)}(jp, name)
 end
@@ -121,6 +122,12 @@ function _arg_tier(arg, paramcls::JClass)
     # primitive parameter
     if haskey(_PRIM_BY_NAME, pn)
         pjt = _PRIM_BY_NAME[pn]
+        # `boolean` is a special case: Julia `Bool` is its natural type, and a
+        # non-Bool must never be silently routed through the integer-widening
+        # branch below (jboolean === UInt8 in JavaCall).
+        if pn == "boolean"
+            return arg isa Bool ? _TIER_EXACT : _TIER_NONE
+        end
         arg isa pjt && return _TIER_EXACT
         if pjt <: Integer && arg isa Integer
             (typemin(pjt) <= arg <= typemax(pjt)) && return _TIER_IMPLICIT
@@ -141,7 +148,8 @@ function _arg_tier(arg, paramcls::JClass)
         actual == pn && return _TIER_EXACT
         try
             JavaCall.isConvertible(JavaObject{Symbol(pn)}, arg) && return _TIER_DERIVED
-        catch
+        catch err
+            @debug "isConvertible check failed in overload resolution" exception=err
         end
         return _TIER_NONE
     end
