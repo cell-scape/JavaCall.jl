@@ -77,8 +77,15 @@ function _gref_class(env, name::String)
     c = JNI.FindClass(name, env)
     c == C_NULL && throw(JProxiesError("FindClass($name) failed during JProxies native registration"))
     g = JNI.NewGlobalRef(c, env)
+    g == C_NULL && throw(JProxiesError("NewGlobalRef($name) failed during JProxies native registration"))
     JNI.DeleteLocalRef(c, env)   # the local ref is created on the registration thread; drop it now
     return g
+end
+
+function _getmethodid(env, cls::Ptr{Cvoid}, name::String, sig::String, what::String)
+    m = JNI.GetMethodID(cls, name, sig, env)
+    m == C_NULL && error("JProxies: failed to resolve $what for the callback box cache")
+    return m
 end
 
 function _init_box_cache!(env)
@@ -89,11 +96,11 @@ function _init_box_cache!(env)
     _box_cache.Double    = _gref_class(env, "java/lang/Double")
     _box_cache.Float     = _gref_class(env, "java/lang/Float")
     _box_cache.Number    = _gref_class(env, "java/lang/Number")
-    _box_cache.m_booleanValue = JNI.GetMethodID(_box_cache.Boolean,   "booleanValue", "()Z", env)
-    _box_cache.m_charValue    = JNI.GetMethodID(_box_cache.Character,  "charValue",    "()C", env)
-    _box_cache.m_longValue    = JNI.GetMethodID(_box_cache.Number,     "longValue",    "()J", env)
-    _box_cache.m_doubleValue  = JNI.GetMethodID(_box_cache.Number,     "doubleValue",  "()D", env)
-    _box_cache.m_intValue     = JNI.GetMethodID(_box_cache.Number,     "intValue",     "()I", env)
+    _box_cache.m_booleanValue = _getmethodid(env, _box_cache.Boolean,   "booleanValue", "()Z", "Boolean.booleanValue()")
+    _box_cache.m_charValue    = _getmethodid(env, _box_cache.Character,  "charValue",    "()C", "Character.charValue()")
+    _box_cache.m_longValue    = _getmethodid(env, _box_cache.Number,     "longValue",    "()J", "Number.longValue()")
+    _box_cache.m_doubleValue  = _getmethodid(env, _box_cache.Number,     "doubleValue",  "()D", "Number.doubleValue()")
+    _box_cache.m_intValue     = _getmethodid(env, _box_cache.Number,     "intValue",     "()I", "Number.intValue()")
     return nothing
 end
 
@@ -172,6 +179,13 @@ end
 # String -> Java String; Bool/Integer/AbstractFloat -> boxed java.lang.X.
 function _marshal_result(penv, result)
     result === nothing && return Ptr{Cvoid}(C_NULL)
+    if result isa JProxyRef
+        # A callback returning another proxy (e.g. a Comparator-like method that
+        # yields a Function-like callback). The `JProxyRef` owns the ref and
+        # outlives this native frame, so the JVM may borrow the raw pointer
+        # without us detaching it.
+        return Ptr{Cvoid}(JavaCall.Ptr(result.obj))
+    end
     if result isa JavaObject
         # Pre-existing handler-owned object; its ref stays owned by the handler
         # (the JVM only borrows the pointer for the native-frame's lifetime).
@@ -232,6 +246,10 @@ function _proxy_invoke_native(penv::Ptr{JNI.JNIEnv}, _jclass::Ptr{Cvoid},
         # JavaObject escapes.
         julia_args = _unmarshal_object_array(penv, jargs)
 
+        if !(isassigned(JavaCall._dispatch_task) && !istaskdone(JavaCall._dispatch_task[]))
+            return _throw_to_java(penv, "JavaCall dispatch task is not running; cannot service the callback")
+        end
+
         box = Channel{Any}(1)
         thunk = let fn = fn, value = value, julia_args = julia_args
             () -> fn(value, julia_args...)
@@ -251,33 +269,36 @@ const _native_registered = Ref(false)
 const _REGISTERED_KEEPALIVE = Any[]   # keep cfunction + cstring buffers rooted
 
 function _ensure_native_registered()
-    _native_registered[] && return nothing
-    JavaCall.assertloaded()
-    env = JavaCall.with_env() do e; e; end
-    handlercls = JNI.FindClass("org/juliainterop/JavaCallInvocationHandler", env)
-    handlercls == C_NULL && throw(JProxiesError(
-        "org.juliainterop.JavaCallInvocationHandler not found on the classpath — " *
-        "make sure `using JProxies` (which runs JProxies.__init__) happens before `JavaCall.init()`"))
+    _native_registered[] && return nothing   # fast path: already registered
+    lock(_proxy_registry_lock) do
+        _native_registered[] && return nothing   # double-checked under the lock
+        JavaCall.assertloaded()
+        env = JavaCall.with_env() do e; e; end
+        handlercls = JNI.FindClass("org/juliainterop/JavaCallInvocationHandler", env)
+        handlercls == C_NULL && throw(JProxiesError(
+            "org.juliainterop.JavaCallInvocationHandler not found on the classpath — " *
+            "make sure `using JProxies` (which runs JProxies.__init__) happens before `JavaCall.init()`"))
 
-    cfn = @cfunction(_proxy_invoke_native, Ptr{Cvoid},
-                     (Ptr{JNI.JNIEnv}, Ptr{Cvoid}, Int64, Ptr{Cvoid}, Ptr{Cvoid}))
+        cfn = @cfunction(_proxy_invoke_native, Ptr{Cvoid},
+                         (Ptr{JNI.JNIEnv}, Ptr{Cvoid}, Int64, Ptr{Cvoid}, Ptr{Cvoid}))
 
-    name_buf = Vector{UInt8}(codeunits("invokeNative")); push!(name_buf, 0x00)
-    sig_buf  = Vector{UInt8}(codeunits("(JLjava/lang/String;[Ljava/lang/Object;)Ljava/lang/Object;")); push!(sig_buf, 0x00)
-    # C `JNINativeMethod { char* name; char* signature; void* fnPtr; }`
-    method_struct = Ptr{Cvoid}[ pointer(name_buf), pointer(sig_buf), Base.unsafe_convert(Ptr{Cvoid}, cfn) ]
+        name_buf = Vector{UInt8}(codeunits("invokeNative")); push!(name_buf, 0x00)
+        sig_buf  = Vector{UInt8}(codeunits("(JLjava/lang/String;[Ljava/lang/Object;)Ljava/lang/Object;")); push!(sig_buf, 0x00)
+        # C `JNINativeMethod { char* name; char* signature; void* fnPtr; }`
+        method_struct = Ptr{Cvoid}[ pointer(name_buf), pointer(sig_buf), Base.unsafe_convert(Ptr{Cvoid}, cfn) ]
 
-    push!(_REGISTERED_KEEPALIVE, cfn)
-    push!(_REGISTERED_KEEPALIVE, name_buf)
-    push!(_REGISTERED_KEEPALIVE, sig_buf)
+        push!(_REGISTERED_KEEPALIVE, cfn)
+        push!(_REGISTERED_KEEPALIVE, name_buf)
+        push!(_REGISTERED_KEEPALIVE, sig_buf)
 
-    rc = GC.@preserve cfn name_buf sig_buf method_struct begin
-        JNI.RegisterNatives(handlercls, method_struct, jint(1), env)
+        rc = GC.@preserve cfn name_buf sig_buf method_struct begin
+            JNI.RegisterNatives(handlercls, method_struct, jint(1), env)
+        end
+        JavaCall.geterror(env)
+        rc == 0 || throw(JProxiesError("RegisterNatives failed for JavaCallInvocationHandler.invokeNative (rc=$rc)"))
+        JNI.DeleteLocalRef(handlercls, env)
+        _init_box_cache!(env)
+        _native_registered[] = true
+        return nothing
     end
-    JavaCall.geterror(env)
-    rc == 0 || throw(JProxiesError("RegisterNatives failed for JavaCallInvocationHandler.invokeNative (rc=$rc)"))
-    JNI.DeleteLocalRef(handlercls, env)
-    _init_box_cache!(env)
-    _native_registered[] = true
-    return nothing
 end
