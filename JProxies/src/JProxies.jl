@@ -1,18 +1,39 @@
 module JProxies
-    import JavaCall: JavaCall, JNI,
-            javaclassname, metaclass, getreturntype, convert_args, convert_arg, geterror,
-            JavaObject, JavaMetaClass,
-            jint, jlong, jbyte, jboolean, jchar, jshort, jfloat, jdouble,
-            JObject, JClass, JMethod, JConstructor, JField, JString,
-            @jimport, jcall, jfield, isnull,
-            getname, getclass, listmethods, getreturntype, getparametertypes, classforname,
-            listfields, gettype,
-            narrow
 
+import JavaCall: JavaCall, JNI,
+        JavaObject, JavaMetaClass, JavaLocalRef,
+        JString, JObject, JClass, JMethod, JConstructor, JField,
+        jint, jlong, jbyte, jboolean, jchar, jshort, jfloat, jdouble, jvoid,
+        @jimport, jcall, jnew, jfield, isnull,
+        getname, getclass, listmethods, listfields, getreturntype, getparametertypes,
+        gettype, classforname, narrow, metaclass
 
-    import Base: convert
+import Base: getproperty, setproperty!, convert, show
 
-    export JProxy, @class, interfacehas, staticproxy, @jimport
+export JProxy, @jimport, unwrap          # jproxy, @jproxy added in M3
 
-    include("proxy.jl")
+const _classdir = abspath(joinpath(@__DIR__, "..", "java"))
+
+function __init__()
+    # Register the bundled InvocationHandler class dir so `jproxy()` (M3) can find it.
+    # Must run before JavaCall.init(); JavaCall's own __init__ only sets state, so
+    # ordering across packages works as long as the user has not yet called init().
+    isdir(_classdir) && JavaCall.addClassPath(_classdir)
 end
+
+"""
+    JProxies.init(args...)
+
+Convenience: forwards to `JavaCall.init`. Safe to call when you only need
+`JProxy` dot-access.
+"""
+function init(args...)
+    JavaCall.init(args...)
+    return nothing
+end
+
+include("dotaccess.jl")
+# include("native.jl")           # M3
+# include("callbacks.jl")        # M3
+
+end # module

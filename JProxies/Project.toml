@@ -6,7 +6,7 @@ version = "0.0.1"
 JavaCall = "494afd89-becb-516b-aafa-70d2670c0337"
 
 [compat]
-JavaCall = "0.7"
+JavaCall = "0.7, 0.8"
 
 [extras]
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
