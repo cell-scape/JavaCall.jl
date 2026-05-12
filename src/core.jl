@@ -674,6 +674,33 @@ geterror() = with_env() do env
     geterror(env)
 end
 
+"""
+    is_virtual_thread(thread::JavaObject{Symbol("java.lang.Thread")}) -> Bool
+
+Return true if the given Thread is a virtual thread (JEP 444, JDK 21+).
+On JVMs older than JDK 21, virtual threads don't exist; this helper
+feature-detects via JNI.GetVersion() and returns false rather than
+calling the (potentially garbage) IsVirtualThread function pointer.
+
+Why GetVersion and not a C_NULL check on JNI.jniref[].IsVirtualThread?
+The JNINativeInterface struct is sized at compile time (234 slots,
+incl. IsVirtualThread). On a JDK <21 JVM the table is only 233 slots
+long, so reading the IsVirtualThread slot reads adjacent memory that
+may contain non-NULL garbage. GetVersion is reliably present
+everywhere from JNI 1.1 onward and returns the JVM's actual JNI
+version, making the feature check authoritative.
+"""
+function is_virtual_thread(thread::JavaObject{Symbol("java.lang.Thread")})
+    with_env() do env
+        version = JNI.GetVersion(env)
+        version < JNI.JNI_VERSION_21 && return false
+        result = ccall(JNI.jniref[].IsVirtualThread, Cuchar,
+                       (Ptr{JNI.JNIEnv}, Ptr{Nothing}),
+                       env, Ptr(thread))
+        return result == 0x01
+    end
+end
+
 #get the JNI signature string for a method, given its
 #return type and argument types
 function method_signature(rettype, argtypes...)

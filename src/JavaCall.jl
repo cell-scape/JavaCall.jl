@@ -14,7 +14,8 @@ export JavaObject, JavaMetaClass, JNIVector,
        @jimport, @jcall, jcall, jfield, jlocalframe, isnull,
        getname, getclass, listmethods, getreturntype, getparametertypes, classforname,
        listfields, gettype,
-       narrow
+       narrow,
+       is_virtual_thread
 
 # using Compat, Compat.Dates
 
