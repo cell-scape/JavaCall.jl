@@ -535,6 +535,26 @@ end
     @test sum_via_critical == 15.0   # 1+2+3+4+5
 end
 
+@testset "jdirect_buffer_zero_copy" begin
+    n = 1024
+    buf = JDirectBuffer{jdouble}(n)
+    @test length(buf.data) == n
+
+    # Capacity reported by Java should be n * sizeof(jdouble) bytes.
+    @test jcall(buf.obj, "capacity", jint, ()) == n * sizeof(jdouble)
+
+    # Fill from Julia, verify Java sees it via DoubleBuffer.
+    fill!(buf.data, 3.14)
+    JDB = @jimport "java.nio.DoubleBuffer"
+    dbview = jcall(buf.obj, "asDoubleBuffer", JDB, ())
+    @test jcall(dbview, "get", jdouble, (jint,), 0) == 3.14
+    @test jcall(dbview, "get", jdouble, (jint,), 100) == 3.14
+
+    # Mutate from Java side, verify Julia Vector sees it.
+    jcall(dbview, "put", JDB, (jint, jdouble), 0, 99.0)
+    @test buf.data[1] == 99.0
+end
+
 @testset "finalizers_release_jvm_memory" begin
     # Allocate many short-lived JStrings, force Julia GC, and verify that
     # the JVM's free heap recovers — i.e. the finalizer's DeleteLocalRef
