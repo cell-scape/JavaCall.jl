@@ -303,8 +303,11 @@ struct JNINativeInterface #struct JNINativeInterface_ {
     #/* New JNI 1.6 Features */
 
     GetObjectRefType::Ptr{Nothing} # jobjectRefType ( *GetObjectRefType) (JNIEnv* env, jobject obj);
+
+    # /* JNI 21 (JDK 21, JEP 444) — Virtual Threads */
+    IsVirtualThread::Ptr{Nothing} # jboolean ( *IsVirtualThread) (JNIEnv* env, jobject obj);
 end #};
-JNINativeInterface() = JNINativeInterface(repeat([C_NULL],233)...) 
+JNINativeInterface() = JNINativeInterface(repeat([C_NULL],234)...)
 
 struct JNIEnv
     JNINativeInterface_::Ptr{JNINativeInterface}

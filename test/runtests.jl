@@ -498,6 +498,14 @@ end
     end
 end
 
+@testset "is_virtual_thread" begin
+    JThread = @jimport "java.lang.Thread"
+    current = jcall(JThread, "currentThread", JThread, ())
+    # On JDK <21 the function pointer is null and we return false.
+    # On JDK 21+ this is a regular platform thread, which also reports false.
+    @test is_virtual_thread(current) == false
+end
+
 @testset "finalizers_release_jvm_memory" begin
     # Allocate many short-lived JStrings, force Julia GC, and verify that
     # the JVM's free heap recovers — i.e. the finalizer's DeleteLocalRef
