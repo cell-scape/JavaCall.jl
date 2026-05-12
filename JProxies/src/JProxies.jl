@@ -1,7 +1,7 @@
 module JProxies
 
 import JavaCall: JavaCall, JNI,
-        JavaObject, JavaMetaClass, JavaLocalRef,
+        JavaObject, JavaMetaClass, JavaLocalRef, JavaGlobalRef,
         JString, JObject, JClass, JMethod, JConstructor, JField,
         jint, jlong, jbyte, jboolean, jchar, jshort, jfloat, jdouble, jvoid,
         @jimport, jcall, jnew, jfield, isnull, unsafe_string,

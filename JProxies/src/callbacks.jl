@@ -65,8 +65,16 @@ mutable struct JProxyRef{T}
     end
 end
 
-convert(::Type{JavaObject{T}}, jp::JProxyRef{T}) where {T} = jp.obj
-convert(::Type{JavaObject{T}}, jp::JProxyRef{S}) where {T, S} = convert(JavaObject{T}, jp.obj)
+# Hand out a *fresh* local ref each time `jcall`/`jnew` ask to convert a
+# JProxyRef to a JavaObject: `_jcall` runs `cleanup_arg` on the converted value
+# (deleting its JNI ref), so returning `jp.obj` directly would null out the
+# proxy after a single call. A new local ref makes that cleanup harmless and
+# keeps the JProxyRef reusable.
+function convert(::Type{JavaObject{T}}, jp::JProxyRef) where {T}
+    JavaCall.with_env() do env
+        JavaObject{T}(JNI.NewLocalRef(JavaCall.Ptr(jp.obj), env))
+    end
+end
 Base.unsafe_convert(::Type{Ptr{Nothing}}, jp::JProxyRef) = JavaCall.Ptr(jp.obj)
 JavaCall.Ptr(jp::JProxyRef) = JavaCall.Ptr(jp.obj)
 JavaCall.isnull(jp::JProxyRef) = JavaCall.isnull(jp.obj)

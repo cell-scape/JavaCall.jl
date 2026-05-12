@@ -2,11 +2,26 @@
 # wiring, and Object[] argument / result marshalling.
 #
 # Threading note: in the supported single-threaded configuration the Java→native
-# call (`invokeNative`) lands on the same OS thread that issued the outer `jcall`,
-# i.e. the JavaCall dispatch / main thread. The native function nevertheless
-# hands the actual Julia handler invocation to the dispatch task (via a `Callback`
-# `DispatchMsg`) and blocks on the result box; the dispatch task is pinned to the
-# same OS thread, so all JNI local references stay valid for the whole upcall.
+# call (`invokeNative`) lands on the same OS thread that issued the outer `jcall`.
+# `_proxy_invoke_native` does its JNI work (arg unmarshalling, result boxing)
+# *itself*, on that thread, inside the native-method frame — that is the only
+# place JNI calls are valid here: the dispatch task runs on the *same* OS thread
+# while the native frame is parked, and re-entering the JVM from a parked-upcall
+# thread (whose C stack has been swapped to the dispatch task's stack) corrupts
+# the JVM's per-thread state. So the dispatch task only ever runs *pure Julia*
+# handler code; it never touches JNI.
+#
+# Lifetime rule (the bug fixed in phase-2c/jproxy-callbacks-fixup): a JNI *local*
+# ref created inside a native method is freed by the JVM when that method returns.
+# Wrapping such a ref in a JavaCall `JavaObject` (whose finalizer later calls
+# `DeleteLocalRef`) is a time bomb — Julia GC may finalize the wrapper long after
+# the native frame is gone, so the `DeleteLocalRef` hits a recycled / invalid
+# slot → intermittent SIGSEGV in libjvm. Therefore `_proxy_invoke_native` must
+# not let any local-ref-backed `JavaObject` escape: incoming `Object[]` elements
+# are either unboxed to plain Julia values (no ref) or promoted to JNI *global*
+# refs (a `JavaGlobalRef` finalizer's `DeleteGlobalRef` is valid from any thread
+# at any time), and the result `JavaObject`s `_marshal_result` builds have their
+# ref detached before return so their finalizers become no-ops.
 
 struct JProxiesError <: Exception
     msg::String
@@ -35,6 +50,53 @@ end
 # (julia_type, :methodName) -> handler function(self, args...)
 const _proxy_method_table = Dict{Tuple{DataType, Symbol}, Any}()
 
+# --- cached box-type handles --------------------------------------------------
+# Global class refs + method IDs for the wrapper types, looked up once at native
+# registration. Used to unbox `Object[]` callback arguments without ever creating
+# a transient local-ref `JavaObject` inside the native-method frame. Method IDs
+# are stable for the JVM's lifetime; the class refs are *global* refs (kept alive
+# here for the process lifetime).
+mutable struct _BoxCache
+    String::Ptr{Cvoid}      # java.lang.String  (global ref)
+    Boolean::Ptr{Cvoid}     # java.lang.Boolean (global ref)
+    Character::Ptr{Cvoid}   # java.lang.Character
+    Long::Ptr{Cvoid}        # java.lang.Long
+    Double::Ptr{Cvoid}      # java.lang.Double
+    Float::Ptr{Cvoid}       # java.lang.Float
+    Number::Ptr{Cvoid}      # java.lang.Number
+    m_booleanValue::Ptr{Cvoid}
+    m_charValue::Ptr{Cvoid}
+    m_longValue::Ptr{Cvoid}
+    m_doubleValue::Ptr{Cvoid}
+    m_intValue::Ptr{Cvoid}
+    _BoxCache() = new(ntuple(_ -> Ptr{Cvoid}(C_NULL), 12)...)
+end
+const _box_cache = _BoxCache()
+
+function _gref_class(env, name::String)
+    c = JNI.FindClass(name, env)
+    c == C_NULL && throw(JProxiesError("FindClass($name) failed during JProxies native registration"))
+    g = JNI.NewGlobalRef(c, env)
+    JNI.DeleteLocalRef(c, env)   # the local ref is created on the registration thread; drop it now
+    return g
+end
+
+function _init_box_cache!(env)
+    _box_cache.String    = _gref_class(env, "java/lang/String")
+    _box_cache.Boolean   = _gref_class(env, "java/lang/Boolean")
+    _box_cache.Character = _gref_class(env, "java/lang/Character")
+    _box_cache.Long      = _gref_class(env, "java/lang/Long")
+    _box_cache.Double    = _gref_class(env, "java/lang/Double")
+    _box_cache.Float     = _gref_class(env, "java/lang/Float")
+    _box_cache.Number    = _gref_class(env, "java/lang/Number")
+    _box_cache.m_booleanValue = JNI.GetMethodID(_box_cache.Boolean,   "booleanValue", "()Z", env)
+    _box_cache.m_charValue    = JNI.GetMethodID(_box_cache.Character,  "charValue",    "()C", env)
+    _box_cache.m_longValue    = JNI.GetMethodID(_box_cache.Number,     "longValue",    "()J", env)
+    _box_cache.m_doubleValue  = JNI.GetMethodID(_box_cache.Number,     "doubleValue",  "()D", env)
+    _box_cache.m_intValue     = JNI.GetMethodID(_box_cache.Number,     "intValue",     "()I", env)
+    return nothing
+end
+
 # --- marshalling helpers ------------------------------------------------------
 
 function _jstring_to_julia(penv, jstr)
@@ -45,24 +107,65 @@ function _jstring_to_julia(penv, jstr)
     return s
 end
 
-# Object[] -> Vector{Any}. Boxed primitives & Strings come back as Julia values
-# (so handlers can do arithmetic / string ops directly); other objects come back
-# as narrowed JavaObjects. Null elements -> `nothing`.
+const _NOEMPTY_JVALUES = JNI.JValue[]
+
+# Object[] -> Vector{Any}. Each element comes in as a raw JNI *local* ref scoped
+# to the native-method frame. We never wrap one in a long-lived JavaObject:
+# boxed primitives & Strings are unboxed to plain Julia values right here (on the
+# Java callback thread, a valid native-method context), other objects are
+# promoted to a JNI *global* ref and handed back as a `java.lang.Object` wrapper
+# (safe to outlive the upcall). Null elements -> `nothing`.
 function _unmarshal_object_array(penv, jarr)
     jarr == C_NULL && return Any[]
     n = Int(JNI.GetArrayLength(jarr, penv))
     out = Vector{Any}(undef, n)
     for i in 0:(n - 1)
         elt = JNI.GetObjectArrayElement(jarr, i, penv)
-        out[i + 1] = _wrap_arg(elt)
+        out[i + 1] = _wrap_arg(penv, elt)
+        # `elt` is a local ref scoped to this native frame; once `_wrap_arg` has
+        # either copied out a Julia value or made a global ref, drop the local.
+        elt != C_NULL && JNI.DeleteLocalRef(elt, penv)
     end
     return out
 end
 
-function _wrap_arg(ptr)
+# Convert one `Object[]` element ref to either a plain Julia value (for boxed
+# primitives / Strings) or a global-ref-backed `JavaObject{java.lang.Object}`.
+# Pure JNI; creates no local-ref-backed JavaObject.
+function _wrap_arg(penv, ptr)
     ptr == C_NULL && return nothing
-    obj = JavaObject{Symbol("java.lang.Object")}(JavaLocalRef(ptr))
-    return _juliafy(narrow(obj))
+    c = _box_cache
+    if JNI.IsInstanceOf(ptr, c.String, penv) != 0
+        return _jstring_to_julia(penv, ptr)
+    elseif JNI.IsInstanceOf(ptr, c.Boolean, penv) != 0
+        return JNI.CallBooleanMethodA(ptr, c.m_booleanValue, _NOEMPTY_JVALUES, penv) != 0
+    elseif JNI.IsInstanceOf(ptr, c.Character, penv) != 0
+        return Char(JNI.CallCharMethodA(ptr, c.m_charValue, _NOEMPTY_JVALUES, penv))
+    elseif JNI.IsInstanceOf(ptr, c.Number, penv) != 0
+        if JNI.IsInstanceOf(ptr, c.Double, penv) != 0 ||
+           JNI.IsInstanceOf(ptr, c.Float, penv) != 0
+            return Float64(JNI.CallDoubleMethodA(ptr, c.m_doubleValue, _NOEMPTY_JVALUES, penv))
+        elseif JNI.IsInstanceOf(ptr, c.Long, penv) != 0
+            return Int64(JNI.CallLongMethodA(ptr, c.m_longValue, _NOEMPTY_JVALUES, penv))
+        else  # Integer / Short / Byte
+            return Int32(JNI.CallIntMethodA(ptr, c.m_intValue, _NOEMPTY_JVALUES, penv))
+        end
+    else
+        # Arbitrary object: hand back a global ref so it survives this native
+        # frame. Callbacks needing to introspect it must do so off the upcall
+        # (e.g. by returning it); JNI on the dispatch task during the upcall is
+        # unsafe (see the threading note above).
+        return JavaObject{Symbol("java.lang.Object")}(JavaGlobalRef(JNI.NewGlobalRef(ptr, penv)))
+    end
+end
+
+# Detach `obj`'s JNI ref and return the raw pointer. The native method hands the
+# pointer to the JVM, which owns it for the duration of the native frame; the
+# `JavaObject`'s finalizer must therefore NOT also try to free it later.
+function _detach_ref!(obj::JavaObject)
+    p = JavaCall.Ptr(obj)
+    obj.ref = JavaCall.J_NULL
+    return Ptr{Cvoid}(p)
 end
 
 # Julia result -> jobject pointer. `nothing` -> NULL; JavaObject -> its ref;
@@ -70,6 +173,8 @@ end
 function _marshal_result(penv, result)
     result === nothing && return Ptr{Cvoid}(C_NULL)
     if result isa JavaObject
+        # Pre-existing handler-owned object; its ref stays owned by the handler
+        # (the JVM only borrows the pointer for the native-frame's lifetime).
         return Ptr{Cvoid}(JavaCall.Ptr(result))
     end
     boxed = if result isa AbstractString
@@ -90,14 +195,17 @@ function _marshal_result(penv, result)
     else
         throw(JProxiesError("cannot marshal callback result of type $(typeof(result))"))
     end
-    return Ptr{Cvoid}(JavaCall.Ptr(boxed))
+    # `boxed` is a freshly-allocated JavaObject local to this function; detach so
+    # its finalizer can't later DeleteLocalRef a ref the JVM/native frame owns.
+    return _detach_ref!(boxed)
 end
 
 function _throw_to_java(penv, msg::AbstractString)
+    # `cls` is a raw local ref (not wrapped in a JavaObject), so it has no
+    # finalizer; the JVM frees it when this native method returns. No explicit
+    # DeleteLocalRef — that would run with the just-set exception pending.
     cls = JNI.FindClass("java/lang/RuntimeException", penv)
-    if cls != C_NULL
-        JNI.ThrowNew(cls, String(msg), penv)
-    end
+    cls != C_NULL && JNI.ThrowNew(cls, String(msg), penv)
     return Ptr{Cvoid}(C_NULL)
 end
 
@@ -117,6 +225,11 @@ function _proxy_invoke_native(penv::Ptr{JNI.JNIEnv}, _jclass::Ptr{Cvoid},
         fn = get(_proxy_method_table, (vtype, Symbol(name)), nothing)
         fn === nothing && return _throw_to_java(penv, "$(vtype) does not implement $(name)")
 
+        # All JNI work (unmarshalling here, boxing in `_marshal_result`) happens
+        # on *this* thread, inside the native-method frame — the only safe place
+        # (see the threading note at the top of this file). `julia_args` are
+        # plain Julia values and/or global-ref `JavaObject`s; no local-ref
+        # JavaObject escapes.
         julia_args = _unmarshal_object_array(penv, jargs)
 
         box = Channel{Any}(1)
@@ -163,6 +276,8 @@ function _ensure_native_registered()
     end
     JavaCall.geterror(env)
     rc == 0 || throw(JProxiesError("RegisterNatives failed for JavaCallInvocationHandler.invokeNative (rc=$rc)"))
+    JNI.DeleteLocalRef(handlercls, env)
+    _init_box_cache!(env)
     _native_registered[] = true
     return nothing
 end
