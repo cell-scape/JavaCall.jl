@@ -16,7 +16,8 @@ export JavaObject, JavaMetaClass, JNIVector,
        listfields, gettype,
        narrow,
        is_virtual_thread,
-       with_critical_array
+       with_critical_array,
+       JDirectBuffer
 
 # using Compat, Compat.Dates
 
