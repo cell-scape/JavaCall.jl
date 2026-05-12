@@ -1,3 +1,13 @@
+"""
+    @jcall receiver.method(arg::ArgType, ...)::RetType
+
+`ccall`-style sugar for [`jcall`](@ref): parses Julia call syntax with
+type-annotated arguments and a return-type annotation into the underlying
+`jcall(receiver, "method", RetType, (ArgType,...), args...)` form. The receiver may
+be a dotted chain (resolved through [`jfield`](@ref)), e.g.
+`@jcall System.getProperty("os.name"::JString)::JString`. See `test/jcall_macro.jl`
+for the full grammar (varargs, static vs instance, `\$`-interpolated method names).
+"""
 macro jcall(expr)
     return jcall_macro_lower(jcall_macro_parse(expr)...)
 end

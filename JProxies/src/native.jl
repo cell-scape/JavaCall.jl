@@ -177,6 +177,15 @@ end
 
 # Julia result -> jobject pointer. `nothing` -> NULL; JavaObject -> its ref;
 # String -> Java String; Bool/Integer/AbstractFloat -> boxed java.lang.X.
+"""
+    _marshal_result(penv, result) -> Ptr{Cvoid}
+
+Convert a Julia callback return value into the `jobject` pointer the native method
+hands back to the JVM. `nothing` → NULL; an existing `JavaObject`/`JProxyRef` →
+its (borrowed, not detached) ref; `String`/`Bool`/`Integer`/`AbstractFloat`/`Char`
+→ a freshly-boxed `java.lang.X` whose ref is *detached* so its finalizer won't
+double-free the pointer the native frame now owns. Unsupported types → `JProxiesError`.
+"""
 function _marshal_result(penv, result)
     result === nothing && return Ptr{Cvoid}(C_NULL)
     if result isa JProxyRef
@@ -226,6 +235,16 @@ end
 # --- the native function bound to JavaCallInvocationHandler.invokeNative -------
 # static native Object invokeNative(long id, String name, Object[] args)
 #   => (JNIEnv*, jclass, jlong, jstring, jobjectArray) -> jobject
+"""
+    _proxy_invoke_native(penv, jclass, handler_id, jname, jargs) -> Ptr{Cvoid}
+
+The `@cfunction` registered as `JavaCallInvocationHandler.invokeNative`. Looks up
+the Julia handler for `handler_id`/`jname`, unmarshals the `Object[]` args *on this
+(native-frame) thread* — the only safe place for JNI here — posts the pure-Julia
+handler call to JavaCall's dispatch task, waits for the result, and marshals it
+back. Any Julia exception (or a missing handler/dispatch task) is converted to a
+Java `RuntimeException` rather than unwinding into the JVM.
+"""
 function _proxy_invoke_native(penv::Ptr{JNI.JNIEnv}, _jclass::Ptr{Cvoid},
                               handler_id::Int64, jname::Ptr{Cvoid},
                               jargs::Ptr{Cvoid})::Ptr{Cvoid}
@@ -268,6 +287,16 @@ end
 const _native_registered = Ref(false)
 const _REGISTERED_KEEPALIVE = Any[]   # keep cfunction + cstring buffers rooted
 
+"""
+    _ensure_native_registered()
+
+Idempotently wire `_proxy_invoke_native` into the JVM: on first call (under the
+registry lock, double-checked) `RegisterNatives` binds it to
+`org.juliainterop.JavaCallInvocationHandler.invokeNative`, the `@cfunction` and its
+name/signature C-string buffers are rooted for the process lifetime, and the
+box-type class/method cache is populated. Throws `JProxiesError` if the handler
+class isn't on the classpath (i.e. `using JProxies` ran after `JavaCall.init()`).
+"""
 function _ensure_native_registered()
     _native_registered[] && return nothing   # fast path: already registered
     lock(_proxy_registry_lock) do

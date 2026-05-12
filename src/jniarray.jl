@@ -8,6 +8,19 @@ jniname(::Type{jfloat}) = "Float"
 jniname(::Type{jdouble}) = "Double"
 
 
+"""
+    JNIVector{T} <: AbstractVector{T}
+
+A Julia `AbstractVector` view over a *pinned* Java primitive array (`T` is a JNI
+primitive: `jint`, `jdouble`, …). Construct from a Julia `Vector{T}` via
+`JNIVector(vec)` / `convert`, with `JNIVector{T}(n)` for a fresh `n`-element array,
+or receive one as a `jcall` result. While pinned, `arr` is an `unsafe_wrap` view
+of the JVM array's storage obtained via `Get*ArrayElements`; `release_elements`
+(`Release*ArrayElements`, mode 0 — copy back + free) is called automatically
+before the vector is re-passed into another `jcall` and again on finalization, and
+is idempotent. JNI calls that touch the backing buffer must keep it alive with
+`GC.@preserve`, mirroring the patterns in this file.
+"""
 mutable struct JNIVector{T} <: AbstractVector{T}
     ref::JavaRef
     arr::Union{Nothing,Vector{T}}

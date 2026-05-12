@@ -20,6 +20,12 @@ end
 JProxy(obj::JavaObject{T}) where {T} = JProxy{T, JavaObject{T}}(obj)
 JProxy(::Type{JavaObject{T}}) where {T} = JProxy{T, Type{JavaObject{T}}}(JavaObject{T})
 
+"""
+    unwrap(jp::JProxy)
+
+Return the wrapped `JavaObject` instance (or `Type{JavaObject{T}}` for a static
+proxy) — the escape hatch back to the low-level `jcall`/`jfield` API.
+"""
 unwrap(jp::JProxy) = getfield(jp, :wrapped)
 
 _is_static(::JProxy{T, Type{JavaObject{T}}}) where {T} = true
@@ -58,6 +64,12 @@ function _juliafy(x)
     return n
 end
 
+"""
+    getproperty(jp::JProxy, name::Symbol)
+
+`jp.name`: if `name` is a Java field, read it (and Julia-fy the value); otherwise
+return a [`JProxyMethod`](@ref) bound to `name` for later overload-resolved calls.
+"""
 function getproperty(jp::JProxy, name::Symbol)
     w = unwrap(jp)
     flds = listfields(w, String(name))
@@ -70,6 +82,12 @@ function getproperty(jp::JProxy, name::Symbol)
     return JProxyMethod{typeof(jp)}(jp, name)
 end
 
+"""
+    setproperty!(jp::JProxy, name::Symbol, value)
+
+Always throws — `JProxy` does not support Java field writes; use the low-level
+[`jfield`](@ref)-based JavaCall API instead.
+"""
 function setproperty!(jp::JProxy, name::Symbol, value)
     throw(ArgumentError("JProxy does not support field writes (v0.9.0); use the low-level JavaCall API"))
 end

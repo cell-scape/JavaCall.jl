@@ -27,6 +27,16 @@ const ppjvm = Ref(Ptr{JavaVM}(C_NULL))
 const jvmfunc = Ref{JNIInvokeInterface}()
 
 
+"""
+    jint, jlong, jbyte, jboolean, jchar, jshort, jfloat, jdouble, jvoid
+
+Julia aliases for the JNI primitive C types, mirroring `<jni_md.h>`/`<jni.h>`:
+`jint === Cint`, `jlong === Clonglong`, `jbyte === Cchar`, `jboolean === Cuchar`,
+`jchar === Cushort`, `jshort === Cshort`, `jfloat === Cfloat`, `jdouble ===
+Cdouble`, `jvoid === Nothing`. Use these (not Julia's `Int`, `Float64`, …) for the
+return-type and argument-type tuples passed to `jcall` so the JNI signature is
+unambiguous. `jprimitive` is the `Union` of all of them.
+"""
 # jni_md.h
 const jint = Cint
 #ifdef _LP64 /* 64-bit Solaris */

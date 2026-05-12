@@ -1,46 +1,57 @@
 """
-    JavaRef is abstract parent for JavaLocalRef, JavaGlobalRef, and JavaNullRef in the JavaCall Module
+    JavaRef
 
-    It is distinct from its parent type, JavaCall.JNI.AbstractJavaRef, since its use is defined in 
-    JavaCall itself rather than the JNI submodule.
+Abstract parent of [`JavaLocalRef`](@ref), [`JavaGlobalRef`](@ref) and
+[`JavaNullRef`](@ref) — the three flavours of JNI reference held inside a
+[`JavaObject`](@ref). Distinct from `JavaCall.JNI.AbstractJavaRef` because its
+meaning (and the cleanup it implies) is defined here, not in the `JNI`
+submodule.
 """
 abstract type JavaRef <: JNI.AbstractJavaRef end
 
 """
-    JavaLocalRef is a JavaRef that is meant to be used with local variables in a function call.
-    After the function call these references may be freed and garbage collected. See note about
-    JNI memory management below.
+    JavaLocalRef
 
-    This is the default reference type returned from the JNI.
-
-    Use this with JNI.PushLocalFrame / JNI.PopLocalFrame for memory management.
-    Also see JNI.EnsureLocalCapacity.
-
-    The internal pointer should be deleted using JNI.DeleteLocalRef
+A JNI *local* reference — valid only on the OS thread it was created on and only
+until that thread's current JNI frame returns. This is the reference type the JNI
+returns by default, so it is the default wrapped by a [`JavaObject`](@ref).
+`deleteref` releases it via `JNI.DeleteLocalRef`. Use [`jlocalframe`](@ref)
+(`PushLocalFrame`/`PopLocalFrame`) to scope batches of local refs in long loops,
+or [`jglobal`](@ref) to promote a long-lived one.
 """
 struct JavaLocalRef <: JavaRef
     ptr::Ptr{Nothing}
 end
 
 """
-    JavaGlobalRef is a JavaRef that is meant to be used with global variables that live beyond 
-    a single function call.
+    JavaGlobalRef
+
+A JNI *global* reference — valid on any thread for as long as it is not deleted.
+`deleteref` releases it via `JNI.DeleteGlobalRef`. Created by [`jglobal`](@ref)
+for references that must outlive a single call frame.
 """
 struct JavaGlobalRef <: JavaRef
     ptr::Ptr{Nothing}
 end
 
 """
-    JavaNullRef is a JavaRef that serves as a placeholder to mark where references have already been deleted.
+    JavaNullRef
 
-    See J_NULL
+A sentinel `JavaRef` wrapping `C_NULL`, used to mark a reference whose underlying
+JNI ref has already been deleted (so `deleteref` on it is a no-op). See
+[`J_NULL`](@ref).
 """
 struct JavaNullRef <: JavaRef
     ptr::Ptr{Nothing}
     JavaNullRef() = new(C_NULL)
 end
 
-""" Constant JavaNullRef """
+"""
+    J_NULL
+
+The singleton [`JavaNullRef`](@ref). Assigned to a `JavaObject`'s `ref` field
+after its JNI reference has been deleted so further `deleteref` calls are no-ops.
+"""
 const J_NULL = JavaNullRef()
 
 Ptr(ref::JavaRef) = ref.ptr
@@ -180,10 +191,13 @@ function jlocalframe(f::Function, returntype::Type{Nothing}; capacity = 16)
 end
 
 """
-    JavaMetaClass represents meta information about a Java class
+    JavaMetaClass{T}
 
-    These are usually cached in _jmc_cache and are meant to live
-    as long as the cache is valid.
+A cached handle to a Java class (a JNI `jclass`, held as a global ref so it
+survives `PopLocalFrame`). `T` is the `Symbol` of the fully-qualified Java class
+name. Obtain one with [`metaclass`](@ref); results are memoized in the
+process-wide `_jmc_cache_v2` dict under `_jmc_cache_lock`, so a class is looked
+up via `FindClass` at most once per process.
 """
 struct JavaMetaClass{T} <: JNI.AbstractJavaRef
     ref::JavaRef
@@ -198,10 +212,20 @@ Ptr(mc::JavaMetaClass{T}) where T = Ptr(mc.ref)
 Ptr{Nothing}(mc::JavaMetaClass{T}) where T = Ptr(mc.ref)
 
 """
-    JavaObject{T} is the main JavaCall type representing either an instance
-    or a static class
+    JavaObject{T}
 
-    T is usually a symbol referring a Java class name
+The main JavaCall type — a mutable wrapper around a [`JavaRef`](@ref) (a JNI
+reference) to a Java object. `T` is the `Symbol` of the fully-qualified Java class
+name, e.g. `JavaObject{Symbol("java.util.ArrayList")}`. Obtain one via
+[`@jimport`](@ref) + [`jnew`](@ref) (constructing a new Java instance), or as the
+return value of a [`jcall`](@ref) / [`jfield`](@ref). When `T` is a class but no
+instance is needed (static method/field calls), the *type* `JavaObject{T}` itself
+is passed.
+
+A finalizer calls `deleteref`, which releases the underlying JNI reference (via
+`DeleteLocalRef` / `DeleteGlobalRef`) on a JVM-attached thread — so Java's GC
+cannot collect the object while a live `JavaObject` exists. Aliases for common
+classes: [`JObject`](@ref) and friends.
 """
 mutable struct JavaObject{T} <: JNI.AbstractJavaRef
     ref::JavaRef
@@ -234,7 +258,12 @@ Ptr(x::JavaObject{T}) where T = Ptr(x.ref)
 Ptr{Nothing}(x::JavaObject{T}) where T = Ptr(x.ref)
 
 """
-   jglobal(x::JavaObject) creates a new JavaGlobalRef and deletes the prior JavaRef
+    jglobal(x::JavaObject)
+
+Promote `x` to a long-lived reference: replace its inner [`JavaRef`](@ref) with a
+freshly-created [`JavaGlobalRef`](@ref) and delete the prior (typically local)
+ref. Use for `JavaObject`s that must remain valid across JNI frames or be passed
+between OS threads.
 """
 function jglobal(x::JavaObject)
     with_env() do env
@@ -305,6 +334,14 @@ function checknull(ptr, msg="Unexpected null pointer from Java Native Interface"
     ptr
 end
 
+"""
+    JObject, JClass, JMethod, JConstructor, JField, JThread, JClassLoader, JString
+
+Convenience aliases for [`JavaObject{T}`](@ref) over commonly-used Java classes —
+`JObject === JavaObject{Symbol("java.lang.Object")}`, `JString ===
+JavaObject{Symbol("java.lang.String")}`, etc. They are used pervasively as
+return-type / argument-type arguments to [`jcall`](@ref).
+"""
 const JClass = JavaObject{Symbol("java.lang.Class")}
 const JObject = JavaObject{Symbol("java.lang.Object")}
 const JMethod = JavaObject{Symbol("java.lang.reflect.Method")}
@@ -348,6 +385,14 @@ function _jimport(juliaclass)
     :(JavaObject{Symbol($juliaclass)})
 end
 
+"""
+    @jimport class
+
+Return the [`JavaObject{T}`](@ref) type for the named Java class — the handle you
+pass to [`jnew`](@ref) / [`jcall`](@ref) / [`jfield`](@ref). `class` may be a
+dotted expression, a symbol, or a string: `@jimport java.util.ArrayList`,
+`@jimport "java.util.ArrayList"`.
+"""
 macro jimport(class::Expr)
     juliaclass = sprint(Base.show_unquoted, class)
     _jimport(juliaclass)
@@ -391,6 +436,14 @@ isprimitive(juliaclass::JClass) = jcall(juliaclass, "isPrimitive", jboolean, ())
 isarray(juliaclass::JClass) = jcall(juliaclass, "isArray", jboolean, ()) == 0x01
 isarray(juliaclass::String) = endswith(juliaclass, "[]")
 
+"""
+    jnew(T::Symbol, argtypes::Tuple = (), args...)
+
+Construct a new Java object of class `T` (a fully-qualified class name symbol) by
+invoking the constructor whose parameter types match `argtypes`, passing `args`.
+Returns a [`JavaObject{T}`](@ref). Usually reached via the `JavaObject{T}(argtypes,
+args...)` constructor rather than called directly.
+"""
 function jnew(T::Symbol, argtypes::Tuple = (), args...)
     assertloaded()
     with_env() do env
@@ -405,6 +458,18 @@ function _jcallable(obj::JavaObject)
     obj
 end
 
+"""
+    jcall(receiver, method::AbstractString, rettype::Type, (argtypes...,), args...)
+    jcall(receiver, method::JMethod, args...)
+
+Call a Java method, modelled on Julia's `ccall`. `receiver` is either a
+[`JavaObject`](@ref) instance (instance method) or a `JavaObject{T}` *type*
+(static method). `method` is the method name (and `rettype` / `argtypes` pin the
+overload and JNI signature) or a reflected [`JMethod`](@ref) (which carries its
+own types). `args` are converted to the declared `argtypes` (see `convert.jl`),
+the call is made on the current OS thread's `JNIEnv*`, and the result is converted
+back to `rettype`. A pending Java exception is raised as a `JavaCallError`.
+"""
 function jcall(ref, method::AbstractString, rettype::Type, argtypes::Tuple = (), args...)
     assertloaded()
     with_env() do env
@@ -598,6 +663,16 @@ function _metaclass(env::Ptr{JNI.JNIEnv}, class::Symbol)
     return JavaMetaClass{class}(JavaGlobalRef(globalptr))
 end
 
+"""
+    metaclass(class)
+    metaclass(env, class)
+
+Return the cached [`JavaMetaClass`](@ref) (JNI `jclass` handle) for `class` — a
+fully-qualified class-name `Symbol`, a `JavaObject{T}` / `Type{JavaObject{T}}`, or
+an `AbstractVector` type. Lookups are memoized process-wide in `_jmc_cache_v2`
+under `_jmc_cache_lock`; the no-`env` form fetches the current thread's
+`JNIEnv*` via `with_env`.
+"""
 function metaclass(env::Ptr{JNI.JNIEnv}, class::Symbol)
     lock(_jmc_cache_lock) do
         get!(_jmc_cache_v2, class) do
@@ -701,8 +776,13 @@ function is_virtual_thread(thread::JavaObject{Symbol("java.lang.Thread")})
     end
 end
 
-#get the JNI signature string for a method, given its
-#return type and argument types
+"""
+    method_signature(rettype, argtypes...) -> String
+
+Build the JNI method type descriptor for a method with the given return and
+argument types, e.g. `method_signature(jint, JString, jdouble) == "(Ljava/lang/String;D)I"`.
+Uses [`signature`](@ref) per type. Used to look up `jmethodID`s.
+"""
 function method_signature(rettype, argtypes...)
     s=IOBuffer()
     write(s, "(")
@@ -714,7 +794,13 @@ function method_signature(rettype, argtypes...)
     return String(take!(s))
 end
 
-#get the JNI signature string for a given type
+"""
+    signature(T) -> String
+
+The JNI field type descriptor for a Julia-side type `T`: `"I"` for `jint`, `"D"`
+for `jdouble`, `"Ljava/lang/String;"` for [`JString`](@ref), `"[I"` for
+`Vector{jint}`, and so on. See also [`method_signature`](@ref).
+"""
 signature(::Type{jboolean}) = "Z"
 signature(::Type{jbyte}) = "B"
 signature(::Type{jchar}) = "C"
