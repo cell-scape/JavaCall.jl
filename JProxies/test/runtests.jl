@@ -92,3 +92,20 @@ end
     jb = jproxy(Boom(), "java.lang.Runnable")
     @test_throws Exception JavaCall.jcall(JTest, "runAndReport", JavaCall.JString, (JRunnable,), jb)
 end
+
+@testset "jproxy callbacks under GC pressure" begin
+    # Hammer a callback while forcing GC. Before the dangling-local-ref fix the
+    # boxed-Integer arg refs (raw native-method local refs) could be finalized
+    # after the native frame was gone, corrupting JVM arena memory -> intermittent
+    # SIGSEGV inside libjvm. After the fix the args are JNI *global* refs, so this
+    # runs clean.
+    JTest = @jimport Test
+    JISL  = @jimport "Test\$IntSupplierLike"
+    d = Doubler(0)
+    jd = jproxy(d, "Test\$IntSupplierLike")
+    for i in 1:300
+        @test JavaCall.jcall(JTest, "callSupplier", JavaCall.jint, (JISL, JavaCall.jint), jd, i) == 2i
+        iszero(i % 10) && GC.gc()
+    end
+    @test d.calls == 300
+end
