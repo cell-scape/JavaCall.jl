@@ -75,7 +75,12 @@ end
     @test (@jcall al.contains("one"::JObject)::jboolean) == 0x01
 
     # mixed-form: arg annotated, no rettype -> macro-expansion error
-    @test_throws Exception (@eval @jcall $al.add("one"::JObject))
+    @test_throws LoadError (@eval @jcall $al.add("one"::JObject))
     # mixed-form: rettype given but arg not annotated -> macro-expansion error
-    @test_throws Exception (@eval @jcall $al.get(0)::JString)
+    @test_throws LoadError (@eval @jcall $al.get(0)::JString)
+
+    # QuoteNode annotation-free path: @jcall T() -> jnew(T, args...) (M2 form)
+    JArrayList2 = @jimport java.util.ArrayList
+    @test (@jcall JArrayList2()) isa JavaObject
+    @test (@jcall JArrayList2(16)) isa JavaObject
 end
