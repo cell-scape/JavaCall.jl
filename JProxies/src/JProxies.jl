@@ -1,5 +1,7 @@
 module JProxies
 
+# _pack_varargs is JavaCall-internal (underscore-prefixed); JProxies reaches
+# in because both packages co-release and share JavaCall.resolve_call.
 import JavaCall: JavaCall, JNI,
         JavaObject, JavaMetaClass, JavaLocalRef, JavaGlobalRef,
         JString, JObject, JClass, JMethod, JConstructor, JField,
@@ -7,7 +9,7 @@ import JavaCall: JavaCall, JNI,
         @jimport, jcall, jnew, jfield, isnull, unsafe_string,
         getname, getclass, listmethods, listfields, getreturntype, getparametertypes,
         gettype, classforname, narrow, metaclass,
-        resolve_call, ResolvedCall, _pack_varargs
+        resolve_call, _pack_varargs
 
 import Base: getproperty, setproperty!, convert, show
 
