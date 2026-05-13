@@ -53,3 +53,29 @@ using JavaCall
     jlist = @jimport java.util.ArrayList
     @test 0x01 == @jcall jlist().add(JObject(C_NULL)::JObject)::jboolean
 end
+
+@testset "Phase 3: @jcall annotation-free" begin
+    JArrayList = @jimport java.util.ArrayList
+    JMath = @jimport java.lang.Math
+    JSystem = @jimport java.lang.System
+    al = JArrayList((),)
+
+    # instance method, single arg, narrowed result
+    @test (@jcall al.add("one")) == true
+    # instance zero-arg call (no rettype -> annotation-free)
+    @test (@jcall al.size()) == 1
+    # narrowing + JString decode
+    @test (@jcall al.get(0)) == "one"
+    # static via @jimport-ed Type (flows through the func-isa-Expr branch)
+    @test (@jcall JMath.abs(Int32(-5))) == 5
+    # dotted-receiver static call (annotation-free)
+    @test (@jcall JSystem.getProperty("java.version")) isa AbstractString
+
+    # fully-annotated form unchanged (regression)
+    @test (@jcall al.contains("one"::JObject)::jboolean) == 0x01
+
+    # mixed-form: arg annotated, no rettype -> macro-expansion error
+    @test_throws Exception (@eval @jcall $al.add("one"::JObject))
+    # mixed-form: rettype given but arg not annotated -> macro-expansion error
+    @test_throws Exception (@eval @jcall $al.get(0)::JString)
+end

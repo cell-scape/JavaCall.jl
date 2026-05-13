@@ -1,12 +1,35 @@
 """
-    @jcall receiver.method(arg::ArgType, ...)::RetType
+    @jcall receiver.method(arg::ArgType, ...)::RetType   # fully-annotated (explicit)
+    @jcall receiver.method(args...)                       # annotation-free (resolved)
 
-`ccall`-style sugar for [`jcall`](@ref): parses Julia call syntax with
-type-annotated arguments and a return-type annotation into the underlying
-`jcall(receiver, "method", RetType, (ArgType,...), args...)` form. The receiver may
-be a dotted chain (resolved through [`jfield`](@ref)), e.g.
-`@jcall System.getProperty("os.name"::JString)::JString`. See `test/jcall_macro.jl`
-for the full grammar (varargs, static vs instance, `\$`-interpolated method names).
+`ccall`-style sugar for [`jcall`](@ref). Two forms are accepted:
+
+- **Fully-annotated** — every argument has a `::Type` annotation **and** the call
+  has a `::RetType` trailer. Lowers verbatim to the explicit
+  `jcall(receiver, "method", RetType, (ArgType,...), args...)` form (zero runtime
+  overload-resolution overhead). The receiver may be a dotted chain (resolved
+  through [`jfield`](@ref)), e.g.
+  `@jcall System.getProperty("os.name"::JString)::JString`.
+
+- **Annotation-free** — *no* `::Type` annotations on any arg **and** *no*
+  `::RetType`. Lowers to the resolved `jcall(receiver, "method", args...)` form,
+  which picks the Java overload from `args`' Julia types via
+  [`resolve_call`](@ref) and narrows the result (object → runtime class,
+  `java.lang.String` → Julia `String`, `void` → `nothing`). Examples:
+  `@jcall al.add("one")`, `@jcall al.size()`, `@jcall JMath.abs(Int32(-5))`,
+  `@jcall System.getProperty("java.version")`. Static calls through an
+  `@jimport`ed class type (`@jcall JMath.abs(x)`) use the same lowering — the
+  resolved `jcall` dispatches static-vs-instance automatically from `typeof(receiver)`.
+
+- **Mixed** — some args annotated and some not, OR a `::RetType` but at least
+  one un-annotated arg, OR at least one annotated arg without a `::RetType` —
+  is rejected at **macro-expansion time** with
+  `error("@jcall: annotate all arguments and the return type, or none — use jcall(...) directly for partial cases.")`.
+  A zero-argument call is never "mixed": annotation-free iff no `::RetType`,
+  fully-annotated iff a `::RetType` is given.
+
+See `test/jcall_macro.jl` for the full grammar (varargs, static vs instance,
+`\$`-interpolated method names).
 """
 macro jcall(expr)
     return jcall_macro_lower(jcall_macro_parse(expr)...)
@@ -14,16 +37,45 @@ end
 
 function jcall_macro_lower(func, rettype, types, args)
     @debug "args: " func rettype types args
-    jtypes = Expr(:tuple, esc.(types)...)
+    # Classify annotation mode. `rettype === nothing` means no `::RetType`; a
+    # `nothing` entry in `types` means the corresponding arg was un-annotated.
+    has_ret = rettype !== nothing
+    n       = length(args)
+    n_typed = count(t -> t !== nothing, types)
+    if n == 0
+        # zero-arg call: explicit iff a rettype is given, annotation-free otherwise.
+        # Never "mixed".
+        mode = has_ret ? :explicit : :resolved
+    elseif has_ret && n_typed == n
+        mode = :explicit
+    elseif !has_ret && n_typed == 0
+        mode = :resolved
+    else
+        error("@jcall: annotate all arguments and the return type, or none — use jcall(...) directly for partial cases.")
+    end
+
     jargs = Expr(:tuple, esc.(args)...)
-    jret = esc(rettype)
     if func isa Expr
         @debug "func" func.head func.args
         obj = resolve_dots(func.args[2])
         f = string(func.args[1].value)
-        return :(jcall($(esc(obj)), $f, $jret, $jtypes, ($jargs)...))
+        if mode === :explicit
+            jtypes = Expr(:tuple, esc.(types)...)
+            jret = esc(rettype)
+            return :(jcall($(esc(obj)), $f, $jret, $jtypes, ($jargs)...))
+        else
+            return :(jcall($(esc(obj)), $f, ($jargs)...))
+        end
     elseif func isa QuoteNode
-        return :($(esc(func.value))($jtypes, ($jargs)...))
+        if mode === :explicit
+            jtypes = Expr(:tuple, esc.(types)...)
+            return :($(esc(func.value))($jtypes, ($jargs)...))
+        else
+            # Bare-Symbol call — historically used for constructor invocation via
+            # `JavaObject{T}(argtypes, args...)`. In annotation-free mode dispatch
+            # through the resolved `jnew(T, args...)` form (M2) instead.
+            return :(jnew($(esc(func.value)), ($jargs)...))
+        end
     end
 end
 
@@ -39,20 +91,40 @@ end
 """
     jcall_macro_parse(expression)
 
-`jcall_macro_parse` is an implementation detail of `@jcall
-it takes an expression like `:(System.out.println("Hello"::JString)::Nothing)`
-returns: a tuple of `(function_name, return_type, arg_types, args)`
-The above input outputs this:
-    (:(System.out.println), Nothing, [:JString], ["Hello])
+`jcall_macro_parse` is an implementation detail of `@jcall`.
+It accepts both annotation-free and fully-annotated call syntax and returns
+`(func, rettype, types, args)` where:
+- `func` is a `QuoteNode` (bare-symbol call) or a 2-element `Expr` capturing
+  the dotted receiver chain + method name.
+- `rettype` is the `::RetType` expression, or `nothing` if no return-type
+  annotation was given.
+- `types` is a `Vector` whose i-th entry is the `::Type` expression for the
+  i-th positional arg, or `nothing` if that arg was not annotated.
+- `args` is the `Vector` of positional argument expressions (annotations stripped).
+
+Examples (head only, of the input):
+- `:(System.out.println("Hello"::JString)::Nothing)` → `(.., :Nothing, [:JString], ["Hello"])`
+- `:(al.add("x"))` (annotation-free) → `(.., nothing, [nothing], ["x"])`
+- `:(al.size())` (annotation-free zero-arg) → `(.., nothing, [], [])`
+- `:(al.get(0)::JString)` (mixed — rettype only) → `(.., :JString, [nothing], [0])` — and
+  `jcall_macro_lower` then errors on the mixed form.
+
+Detecting "mixed" is left to the caller (`jcall_macro_lower`) — this parser is
+permissive so the lower can produce a single, unified error message.
 """
 function jcall_macro_parse(expr::Expr)
-    # setup and check for errors
-    if !Meta.isexpr(expr, :(::))
-        throw(ArgumentError("@jcall needs a function signature with a return type"))
+    # A bare call like `al.size()` has head `:call`; a call with `::RetType`
+    # has head `:(::)` and `args[1]` is the call.
+    if Meta.isexpr(expr, :(::))
+        rettype = expr.args[2]
+        call = expr.args[1]
+    elseif Meta.isexpr(expr, :call)
+        rettype = nothing
+        call = expr
+    else
+        throw(ArgumentError("@jcall expects a function call, optionally annotated with `::RetType`"))
     end
-    rettype = expr.args[2]
 
-    call = expr.args[1]
     if !Meta.isexpr(call, :call)
         throw(ArgumentError("@jcall has to take a function call"))
     end
@@ -79,16 +151,18 @@ function jcall_macro_parse(expr::Expr)
         varargs = callargs[2].args
     end
 
-    # collect args and types
+    # collect args and types; un-annotated args contribute `nothing` to `types`
     args = []
     types = []
 
     function pusharg!(arg)
-        if !Meta.isexpr(arg, :(::))
-            throw(ArgumentError("args in @jcall need type annotations. '$arg' doesn't have one."))
+        if Meta.isexpr(arg, :(::))
+            push!(args, arg.args[1])
+            push!(types, arg.args[2])
+        else
+            push!(args, arg)
+            push!(types, nothing)
         end
-        push!(args, arg.args[1])
-        push!(types, arg.args[2])
     end
 
     for i in argstart:length(callargs)
