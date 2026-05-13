@@ -109,9 +109,12 @@ show(io::IO, m::JProxyMethod) = print(io, "JProxyMethod(", getfield(m, :name), "
 
 function (m::JProxyMethod)(args...)
     w = unwrap(getfield(m, :jp))
+    # Overload resolution (scoring ladder + cache) lives in JavaCall src/overload.jl.
     r = resolve_call(w, String(m.name), args)
     callargs = r.varargs ? _pack_varargs(r, args) : args
     # jcall(ref, method::JMethod, args...) derives rettype/argtypes from the
     # reflected method itself, and _jcallable(ref) routes static vs instance.
+    # _juliafy (not _resolved_result): also unboxes java.lang.Integer/Double/…
+    # to Julia primitives — required by the JProxy dot-access contract.
     return _juliafy(jcall(w, r.member::JMethod, callargs...))
 end
