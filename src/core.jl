@@ -517,16 +517,19 @@ Resolved-overload form of [`jcall`](@ref): picks the Java overload of `method` o
 [`resolve_call`](@ref) — dispatches it, and post-processes the result: `void` →
 `nothing`; a `java.lang.String` return → a Julia `String` (a `null` String as
 `""`, matching JavaCall's existing behavior); any other object return →
-[`narrow`](@ref)ed to its runtime class; primitives unchanged. Java varargs are
-spread automatically (pass a single `AbstractVector` to forward an array
-directly). Throws `JavaCallError` on an
-ambiguous match or no match. For a pinned overload / return type, or in a hot loop,
-use the explicit `jcall(receiver, method, RetType, (ArgTypes...,), args...)` form.
+[`narrow`](@ref)ed to its runtime class; primitives unchanged. A null reference
+return becomes `nothing` (except a declared-`String` return, which becomes `""`
+per JavaCall's existing convention). Java varargs are spread automatically
+(pass a single `AbstractVector` to forward an array directly). Throws
+`JavaCallError` on an ambiguous match or no match. For a pinned overload /
+return type, or in a hot loop, use the explicit
+`jcall(receiver, method, RetType, (ArgTypes...,), args...)` form.
 """
 function jcall(receiver, method::AbstractString, args...)
     assertloaded()
     r = resolve_call(receiver, method, args)
     callargs = r.varargs ? _pack_varargs(r, args) : args
+    # argtypes are re-derived inside jcall(_, ::JMethod, _...) from the cached JMethod; r.paramtypes is only used on the jnew path
     result = jcall(receiver, r.member::JMethod, callargs...)   # reuse the existing JMethod-dispatch path
     return _resolved_result(r.rettype, result)
 end
@@ -534,6 +537,7 @@ end
 # Pack the trailing args of a varargs call into a Vector of the declared element
 # type. If the caller already passed a single trailing AbstractVector, forward it
 # as-is rather than double-wrapping. Empty varargs → an empty Vector{eltype}.
+# r is a ResolvedCall (untyped here because core.jl is included before overload.jl defines ResolvedCall)
 function _pack_varargs(r, args)
     fixed = args[1:r.n_fixed]
     rest  = args[(r.n_fixed + 1):end]
@@ -547,17 +551,18 @@ function _pack_varargs(r, args)
     return (fixed..., arr)
 end
 
-# Post-process a resolved call's result for the ergonomic form. The
-# `jcall(_, ::JMethod, _...)` path already decodes a *declared* `java.lang.String`
-# return to a Julia `String` (a `null` String surfaces as `""`, matching JavaCall's
-# existing behavior). For other object returns we [`narrow`](@ref) to the runtime
-# class and, if that runtime class is `java.lang.String`, decode it too (so e.g.
-# `List.get` — declared `Object` — yields a Julia `String` when it actually holds
-# one). `void` → `nothing`; primitives pass through unchanged.
+# Post-process a resolved call's result for the ergonomic form:
+# `void` → `nothing`; primitives pass through; a `JString` rettype → Julia `String`
+# (a null String becomes `""`, matching JavaCall's existing behavior); any other
+# `JavaObject` rettype → [`narrow`](@ref)ed to its runtime class (a null reference
+# returns `nothing`). When narrowing produces a `JString` we decode it to Julia
+# `String` (so e.g. `List.get` — declared `Object` — yields a Julia `String` when
+# it actually holds one).
 function _resolved_result(rettype::Type, x)
     rettype === Nothing && return nothing
     rettype === JString && return x                # already a Julia String
     if rettype <: JavaObject
+        isnull(x) && return nothing                # Java null reference -> Julia nothing
         n = narrow(x)
         return n isa JString ? (isnull(n) ? "" : unsafe_string(n)) : n
     end

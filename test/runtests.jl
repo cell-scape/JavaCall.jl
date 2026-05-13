@@ -435,6 +435,8 @@ end
     @test jcall(JTest, "joinVarargs", "-") == ""
     # nothing -> null: testString returns its argument; a null String return -> "" (existing JavaCall contract)
     @test jcall(JTest, "testString", nothing) == ""
+    # Java null reference return -> Julia nothing (not a crash from narrow-on-null)
+    @test jcall(JTest, "testNull") === nothing
     # ambiguity & no-match throw JavaCallError
     @test_throws JavaCall.JavaCallError jcall(JTest, "widen", Int32(3))
     @test_throws JavaCall.JavaCallError jcall(al, "add", 1, 2, 3)
