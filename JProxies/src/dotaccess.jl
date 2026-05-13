@@ -1,5 +1,5 @@
 # Dot-access on Java objects: JProxy(obj).method(args...) and JProxy(obj).field.
-# No runtime eval; overload resolution is a small quality-score ladder, cached.
+# No runtime eval; overload resolution is delegated to `JavaCall.resolve_call`.
 
 """
     JProxy(obj::JavaObject)        # instance methods + instance fields
@@ -96,8 +96,9 @@ end
     JProxyMethod{P}(jp::P, name::Symbol)
 
 A bound, not-yet-resolved Java method. Calling it picks the best overload for the
-given argument types (cached), then dispatches via `jcall` (instance or static —
-`jcall` dispatches on the wrapped value), and `narrow`s the result.
+given argument types via [`JavaCall.resolve_call`](@ref), dispatches via `jcall`
+(instance or static — `jcall` dispatches on the wrapped value), and Julia-fies
+the result (narrow + JString→String + boxed-primitive→Julia).
 """
 struct JProxyMethod{P}
     jp::P
@@ -106,113 +107,11 @@ end
 
 show(io::IO, m::JProxyMethod) = print(io, "JProxyMethod(", getfield(m, :name), ")")
 
-const _RESOLVE_CACHE = Dict{Tuple{DataType, Symbol, Tuple}, JMethod}()
-const _RESOLVE_LOCK = ReentrantLock()
-
 function (m::JProxyMethod)(args...)
-    jp = getfield(m, :jp)
-    name = getfield(m, :name)
-    w = unwrap(jp)
-    argtypes = map(typeof, args)
-    key = (typeof(w), name, argtypes)
-    method = lock(_RESOLVE_LOCK) do
-        get!(_RESOLVE_CACHE, key) do
-            _resolve_overload(w, name, args)
-        end
-    end
+    w = unwrap(getfield(m, :jp))
+    r = resolve_call(w, String(m.name), args)
+    callargs = r.varargs ? _pack_varargs(r, args) : args
     # jcall(ref, method::JMethod, args...) derives rettype/argtypes from the
     # reflected method itself, and _jcallable(ref) routes static vs instance.
-    return _juliafy(jcall(w, method, args...))
-end
-
-# --- overload resolution: quality-score ladder ---------------------------------
-# Tiers (lower = better): 0 exact, 1 derived (subclass), 2 implicit (box/widen),
-# 3 not-reachable-without-explicit-convert => candidate rejected.
-const _TIER_EXACT, _TIER_DERIVED, _TIER_IMPLICIT, _TIER_NONE = 0, 1, 2, 3
-
-const _PRIM_BY_NAME = Dict{String, DataType}(
-    "boolean" => jboolean, "byte" => jbyte, "char" => jchar, "short" => jshort,
-    "int" => jint, "long" => jlong, "float" => jfloat, "double" => jdouble,
-)
-
-function _arg_tier(arg, paramcls::JClass)
-    pn = getname(paramcls)
-    # primitive parameter
-    if haskey(_PRIM_BY_NAME, pn)
-        pjt = _PRIM_BY_NAME[pn]
-        # `boolean` is a special case: Julia `Bool` is its natural type, and a
-        # non-Bool must never be silently routed through the integer-widening
-        # branch below (jboolean === UInt8 in JavaCall).
-        if pn == "boolean"
-            return arg isa Bool ? _TIER_EXACT : _TIER_NONE
-        end
-        arg isa pjt && return _TIER_EXACT
-        if pjt <: Integer && arg isa Integer
-            (typemin(pjt) <= arg <= typemax(pjt)) && return _TIER_IMPLICIT
-            return _TIER_NONE
-        end
-        if pjt <: AbstractFloat && arg isa Real && !(arg isa Bool)
-            return _TIER_IMPLICIT
-        end
-        return _TIER_NONE
-    end
-    # reference parameter
-    if arg isa AbstractString
-        (pn == "java.lang.String" || pn == "java.lang.CharSequence" || pn == "java.lang.Object") && return _TIER_DERIVED
-        return _TIER_NONE
-    end
-    if arg isa JavaObject
-        actual = getname(getclass(arg))
-        actual == pn && return _TIER_EXACT
-        try
-            JavaCall.isConvertible(JavaObject{Symbol(pn)}, arg) && return _TIER_DERIVED
-        catch err
-            @debug "isConvertible check failed in overload resolution" exception=err
-        end
-        return _TIER_NONE
-    end
-    if arg isa Bool
-        (pn == "java.lang.Boolean" || pn == "java.lang.Object") && return _TIER_IMPLICIT
-        return _TIER_NONE
-    end
-    if arg isa Integer
-        (pn in ("java.lang.Long", "java.lang.Integer", "java.lang.Number", "java.lang.Object")) && return _TIER_IMPLICIT
-        return _TIER_NONE
-    end
-    if arg isa AbstractFloat
-        (pn in ("java.lang.Double", "java.lang.Float", "java.lang.Number", "java.lang.Object")) && return _TIER_IMPLICIT
-        return _TIER_NONE
-    end
-    pn == "java.lang.Object" && return _TIER_IMPLICIT
-    return _TIER_NONE
-end
-
-function _resolve_overload(w, name::Symbol, args)
-    candidates = listmethods(w, String(name))
-    isempty(candidates) && throw(ArgumentError("no method $(String(name)) on $(typeof(w))"))
-    nargs = length(args)
-    scored = Tuple{Vector{Int}, JMethod}[]
-    for mth in candidates
-        ptypes = getparametertypes(mth)
-        length(ptypes) == nargs || continue
-        tiers = Int[]
-        ok = true
-        for (a, pc) in zip(args, ptypes)
-            t = _arg_tier(a, pc)
-            if t == _TIER_NONE
-                ok = false
-                break
-            end
-            push!(tiers, t)
-        end
-        ok && push!(scored, (tiers, mth))
-    end
-    isempty(scored) && throw(ArgumentError(
-        "no overload of $(String(name)) on $(typeof(w)) accepts argument types $(map(typeof, args))"))
-    sort!(scored, by = first)
-    best_score = first(scored[1])
-    ties = filter(s -> first(s) == best_score, scored)
-    length(ties) > 1 && throw(ArgumentError(
-        "ambiguous call $(String(name))$(map(typeof, args)): $(length(ties)) overloads match equally well"))
-    return scored[1][2]
+    return _juliafy(jcall(w, r.member::JMethod, callargs...))
 end

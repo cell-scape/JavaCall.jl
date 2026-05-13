@@ -6,7 +6,8 @@ import JavaCall: JavaCall, JNI,
         jint, jlong, jbyte, jboolean, jchar, jshort, jfloat, jdouble, jvoid,
         @jimport, jcall, jnew, jfield, isnull, unsafe_string,
         getname, getclass, listmethods, listfields, getreturntype, getparametertypes,
-        gettype, classforname, narrow, metaclass
+        gettype, classforname, narrow, metaclass,
+        resolve_call, ResolvedCall, _pack_varargs
 
 import Base: getproperty, setproperty!, convert, show
 
