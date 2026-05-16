@@ -434,15 +434,211 @@ function _jimport(juliaclass)
     :(JavaObject{Symbol($juliaclass)})
 end
 
-"""
-    @jimport class
+# === @jimport multi-import helpers (Phase 3 sub-2) =========================
+#
+# Background on AST shapes Julia's parser produces (verified via `dump`):
+#
+#   @jimport java.util: ArrayList
+#       Expr(:call, :(:), :(java.util), :ArrayList)
+#
+#   @jimport java.util: ArrayList, HashMap, Map
+#       Expr(:tuple,
+#            Expr(:call, :(:), :(java.util), :ArrayList),  # colon binds tightly
+#            :HashMap,
+#            :Map)
+#
+#   @jimport java.util: ArrayList => JAL, HashMap
+#       Expr(:tuple,
+#            Expr(:call, :(=>),
+#                 Expr(:call, :(:), :(java.util), :ArrayList),
+#                 :JAL),
+#            :HashMap)
+#
+#   @jimport (java.util.ArrayList, java.lang.System)
+#       Expr(:tuple,
+#            Expr(:., :(java.util), QuoteNode(:ArrayList)),
+#            Expr(:., :(java.lang), QuoteNode(:System)))
+#
+# So a `:tuple` may be either the colon form (first element carries the
+# `Expr(:call, :(:), prefix, _)` either directly or wrapped in `=>`) or the
+# tuple form (each element is a dotted FQN or `FQN => Target`).
+# `_colon_split_first` performs that disambiguation: it returns
+# `(prefix, normalized_entries)` if the head is colon-form, or
+# `(nothing, _)` if it's tuple-form.
 
-Return the [`JavaObject{T}`](@ref) type for the named Java class — the handle you
-pass to [`jnew`](@ref) / [`jcall`](@ref) / [`jfield`](@ref). `class` may be a
-dotted expression, a symbol, or a string: `@jimport java.util.ArrayList`,
-`@jimport "java.util.ArrayList"`.
+# Try to extract the colon prefix out of the first tuple element. Returns
+# `(prefix, entries)` on a colon-form match (entries is the input list with
+# the prefix peeled from the first element), or `(nothing, args)` otherwise.
+function _colon_split_first(args)
+    isempty(args) && return (nothing, args)
+    head = args[1]
+    # `prefix : Name` directly as the first element
+    if head isa Expr && head.head === :call && length(head.args) == 3 &&
+       head.args[1] === :(:)
+        prefix = head.args[2]
+        first_entry = head.args[3]
+        return (prefix, Any[first_entry, args[2:end]...])
+    end
+    # `prefix : Name => Target` wraps the colon-call in an `=>` call
+    if head isa Expr && head.head === :call && length(head.args) == 3 &&
+       head.args[1] === :(=>)
+        lhs = head.args[2]
+        if lhs isa Expr && lhs.head === :call && length(lhs.args) == 3 &&
+           lhs.args[1] === :(:)
+            prefix = lhs.args[2]
+            short = lhs.args[3]
+            target = head.args[3]
+            # Re-fold the first entry as `short => target` (without the colon prefix)
+            rebuilt = Expr(:call, :(=>), short, target)
+            return (prefix, Any[rebuilt, args[2:end]...])
+        end
+    end
+    return (nothing, args)
+end
+
+# Colon form emitter. `entries` are the body entries with the colon prefix
+# already stripped (each is either a Symbol or `Name => Target` Expr).
+function _jimport_colon(prefix, entries)
+    pkg = sprint(Base.show_unquoted, prefix)
+    isempty(entries) && error("@jimport: empty colon-form import list.")
+    assignments = Any[]
+    for entry in entries
+        short, target = _parse_short_entry(entry)
+        fqn = string(pkg, ".", short)
+        push!(assignments, :($(esc(target)) = JavaObject{Symbol($fqn)}))
+    end
+    push!(assignments, :(nothing))   # the block evaluates to `nothing`
+    return Expr(:block, assignments...)
+end
+
+# Parse one entry of a colon-form body — either `Name` or `Name => Target`.
+# Returns (short::Symbol, target::Symbol). Errors on anything else.
+function _parse_short_entry(entry)
+    if entry isa Symbol
+        return (entry, entry)
+    end
+    if entry isa Expr && entry.head === :call && length(entry.args) == 3 &&
+       entry.args[1] === :(=>) && entry.args[2] isa Symbol && entry.args[3] isa Symbol
+        return (entry.args[2], entry.args[3])
+    end
+    error("@jimport: expected `Name` or `Name => Target` after `:`, got `$entry`.")
+end
+
+# Tuple form emitter. Each entry is a dotted FQN Expr, a bare Symbol (no
+# package), or `FQN => Target`.
+function _jimport_tuple(entries)
+    isempty(entries) && error("@jimport: empty tuple-form import list.")
+    assignments = Any[]
+    for entry in entries
+        fqn_expr, target = _parse_tuple_entry(entry)
+        fqn = sprint(Base.show_unquoted, fqn_expr)
+        push!(assignments, :($(esc(target)) = JavaObject{Symbol($fqn)}))
+    end
+    push!(assignments, :(nothing))
+    return Expr(:block, assignments...)
+end
+
+# Parse one entry of a tuple-form import — either a dotted FQN Expr (or bare
+# Symbol for an unpackaged class), or `FQN => Target`. Returns
+# `(fqn_expression, target::Symbol)`. Errors otherwise.
+function _parse_tuple_entry(entry)
+    if entry isa Symbol
+        return (entry, entry)
+    end
+    if entry isa Expr && entry.head === :.
+        target = _last_dotted_segment(entry)
+        return (entry, target)
+    end
+    if entry isa Expr && entry.head === :call && length(entry.args) == 3 &&
+       entry.args[1] === :(=>)
+        entry.args[3] isa Symbol ||
+            error("@jimport: rename target (right-hand side of `=>`) must be a Symbol, got `$(entry.args[3])`.")
+        lhs = entry.args[2]
+        (lhs isa Symbol || (lhs isa Expr && lhs.head === :.)) ||
+            error("@jimport: rename source must be a fully-qualified class expression, got `$lhs`.")
+        return (lhs, entry.args[3])
+    end
+    error("@jimport: tuple entries must be `FQN` or `FQN => Target`, got `$entry`.")
+end
+
+# `Expr(:., :(java.util), QuoteNode(:ArrayList))` -> `:ArrayList`.
+function _last_dotted_segment(expr::Expr)
+    expr.head === :. || error("@jimport: expected a dotted expression, got `$expr`.")
+    last = expr.args[2]
+    last isa QuoteNode && (last = last.value)
+    last isa Symbol || error("@jimport: cannot derive a short name from `$expr`.")
+    return last
+end
+
+"""
+    @jimport class                                # returns the JavaObject{Symbol(class)} type
+    @jimport package: Class                       # binds `Class = JavaObject{Symbol("package.Class")}`
+    @jimport package: A, B => JB, C               # multi-bind with optional `=>` rename
+    @jimport (pkg1.A, pkg2.B => JB)               # tuple form (cross-package), `=>` rename optional
+
+Bring Java class types into the local / module scope.
+
+**Single-class form** (the original): `@jimport java.util.ArrayList` returns the
+type `JavaObject{Symbol("java.util.ArrayList")}` as an expression value. `class`
+may be a dotted expression, a symbol, a string, or the nested-class escape
+`@jimport(Outer\$Inner)`.
+
+**Multi-import (colon form):** `@jimport java.util: ArrayList, HashMap, Map`
+binds three locals at the expansion site — equivalent to three single-class
+`@jimport` statements. Use `=>` to rename: `@jimport java.util: ArrayList =>
+JArrayList`. (`=>` is the standard `Pair` operator; `as` would not parse outside
+of `using/import` clauses.)
+
+**Multi-import (tuple form):** `@jimport (java.util.ArrayList, java.lang.System)`
+binds each by the FQN's last segment; cross-package is allowed in one call.
+Renames work the same way: `@jimport (java.util.ArrayList => JArrayList)`.
+A one-element tuple `@jimport (java.util.ArrayList,)` is a multi-import of one
+(binds `ArrayList`); the un-tupled `@jimport java.util.ArrayList` (no trailing
+comma) keeps the single-class semantics of returning the type.
+
+In every form, JavaCall already ships built-in aliases for the standard
+library's most-common classes (`JList`, `JArrayList`, `JMap`, `JHashMap`,
+`JInteger`, `JRunnable`, `JFile`, and more — see the [`JObject`](@ref) block) so
+the common cases need no `@jimport` at all.
+
+A macro-expansion-time `error(...)` is raised on a malformed multi-import:
+non-Symbol rename target, empty colon-form import list, non-FQN tuple entry,
+etc.
 """
 macro jimport(class::Expr)
+    # Colon form (single name): `@jimport package: Name`
+    #   parses as Expr(:call, :(:), prefix, entry)
+    if class.head === :call && length(class.args) == 3 && class.args[1] === :(:)
+        return _jimport_colon(class.args[2], Any[class.args[3]])
+    end
+    # Colon form (single rename): `@jimport package: Name => Target`
+    #   `=>` is right-associative and binds looser than the `:` call here, so
+    #   the whole expression is `Expr(:call, :(=>), Expr(:call, :(:), prefix,
+    #   Name), Target)`. We peel off the outer `=>` and feed the rebuilt
+    #   `Name => Target` to the colon path.
+    if class.head === :call && length(class.args) == 3 && class.args[1] === :(=>)
+        lhs = class.args[2]
+        if lhs isa Expr && lhs.head === :call && length(lhs.args) == 3 &&
+           lhs.args[1] === :(:)
+            prefix = lhs.args[2]
+            short  = lhs.args[3]
+            target = class.args[3]
+            return _jimport_colon(prefix, Any[Expr(:call, :(=>), short, target)])
+        end
+    end
+    # Colon form (multi-name) or tuple form: both parse as Expr(:tuple, ...).
+    # Disambiguate by looking at the first element — if it carries an
+    # `Expr(:call, :(:), prefix, first)` (possibly wrapped in `=>`), it's
+    # the colon form spliced across a `,`; otherwise it's the tuple form.
+    if class.head === :tuple
+        prefix, entries = _colon_split_first(class.args)
+        if prefix !== nothing
+            return _jimport_colon(prefix, entries)
+        end
+        return _jimport_tuple(class.args)
+    end
+    # Single-class form (unchanged): a dotted FQN expression / nested-class
+    # escape / etc.
     juliaclass = sprint(Base.show_unquoted, class)
     _jimport(juliaclass)
 end
