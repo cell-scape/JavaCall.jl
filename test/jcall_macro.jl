@@ -84,3 +84,75 @@ end
     @test (@jcall JArrayList2()) isa JavaObject
     @test (@jcall JArrayList2(16)) isa JavaObject
 end
+
+@testset "Phase 3 sub-2: @jimport multi-import" begin
+    # --- regression: single-class forms still return a Type ---
+    @test (@jimport java.util.ArrayList) === JavaObject{Symbol("java.util.ArrayList")}
+    @test (@jimport "java.util.HashMap") === JavaObject{Symbol("java.util.HashMap")}
+    @test (@jimport ArrayList)           === JavaObject{Symbol("ArrayList")}  # bare-Symbol path
+
+    # --- colon form: single name ---
+    let
+        @jimport java.util: ArrayList
+        @test ArrayList === JavaObject{Symbol("java.util.ArrayList")}
+    end
+
+    # --- colon form: multi-bind ---
+    let
+        @jimport java.util: ArrayList, HashMap, Map
+        @test ArrayList === JavaObject{Symbol("java.util.ArrayList")}
+        @test HashMap   === JavaObject{Symbol("java.util.HashMap")}
+        @test Map       === JavaObject{Symbol("java.util.Map")}
+    end
+
+    # --- colon form with `=>` rename ---
+    let
+        @jimport java.util: ArrayList => JAL, HashMap => JHM
+        @test JAL === JavaObject{Symbol("java.util.ArrayList")}
+        @test JHM === JavaObject{Symbol("java.util.HashMap")}
+    end
+
+    # --- colon form: mixed rename + bare ---
+    let
+        @jimport java.util: ArrayList => JAL, HashMap
+        @test JAL     === JavaObject{Symbol("java.util.ArrayList")}
+        @test HashMap === JavaObject{Symbol("java.util.HashMap")}
+    end
+
+    # --- tuple form (cross-package) ---
+    let
+        @jimport (java.util.ArrayList, java.lang.System)
+        @test ArrayList === JavaObject{Symbol("java.util.ArrayList")}
+        @test System    === JavaObject{Symbol("java.lang.System")}
+    end
+
+    # --- tuple form with renames ---
+    let
+        @jimport (java.util.ArrayList => JAL, java.lang.System => JSys)
+        @test JAL  === JavaObject{Symbol("java.util.ArrayList")}
+        @test JSys === JavaObject{Symbol("java.lang.System")}
+    end
+
+    # --- single-element tuple == multi-import of 1 ---
+    let
+        @jimport (java.util.ArrayList,)
+        @test ArrayList === JavaObject{Symbol("java.util.ArrayList")}
+    end
+
+    # --- scope: colon-form binding inside a let stays local ---
+    let
+        @jimport java.util: HashSet
+        @test @isdefined(HashSet)
+    end
+    @test !@isdefined(HashSet)   # let-scoped, not leaked to the testset's enclosing scope
+
+    # --- macro-expansion errors ---
+    # Empty colon-form is a parser error (`@jimport java.util:` is unparseable),
+    # so we exercise the empty-list error path through the helper directly.
+    @test_throws ErrorException JavaCall._jimport_colon(:(java.util), Any[])
+    @test_throws ErrorException JavaCall._jimport_tuple(Any[])
+    # The shapes below DO reach macroexpansion; their errors surface as LoadError via @eval.
+    @test_throws LoadError (@eval @jimport java.util: 42)                          # non-Symbol entry
+    @test_throws LoadError (@eval @jimport (java.util.ArrayList => 5,))            # non-Symbol rename target
+    @test_throws LoadError (@eval @jimport java.util: ArrayList => HashMap => X)   # malformed rename chain
+end
