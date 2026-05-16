@@ -734,6 +734,34 @@ include("jcall_macro.jl")
     @test take!(box3) === :ok
 end
 
+@testset "Phase 3 sub-2: built-in J* aliases" begin
+    # Spot-check one alias from each category — they should all be:
+    #   - exported by JavaCall
+    #   - bound to JavaObject{Symbol("<the fully-qualified name>")}
+    spot = [
+        (:JList,       "java.util.List"),
+        (:JArrayList,  "java.util.ArrayList"),
+        (:JHashMap,    "java.util.HashMap"),
+        (:JInteger,    "java.lang.Integer"),
+        (:JLong,       "java.lang.Long"),
+        (:JRunnable,   "java.lang.Runnable"),
+        (:JFile,       "java.io.File"),
+        (:JDate,       "java.util.Date"),
+    ]
+    exported = Set(names(JavaCall))
+    for (name, fqn) in spot
+        @test name in exported
+        @test getfield(JavaCall, name) === JavaObject{Symbol(fqn)}
+    end
+    # End-to-end smoke test using the resolved jcall/jnew forms (from sub-project 1):
+    a = JavaCall.jnew(JArrayList)
+    @test jcall(a, "size") == 0
+    jcall(a, "add", "one")
+    @test jcall(a, "size") == 1
+    # Integer alias usable as a class type — a quick reflection probe:
+    @test JavaCall.getname(classforname("java.lang.Integer")) == "java.lang.Integer"
+end
+
 end
 
 # Test downstream dependencies
