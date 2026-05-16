@@ -145,4 +145,8 @@ public class Test {
   public static int callSupplier(IntSupplierLike s, int x) { return s.supply(x); }
 
   public static String runAndReport(Runnable r) { r.run(); return "ran"; }
+
+  // --- Phase 3 sub-3: iteration fixtures ---
+  public static int[]    intArray()  { return new int[]{ 10, 20, 30 }; }
+  public static Object[] objArray()  { return new Object[]{ "a", Integer.valueOf(7) }; }
 }
