@@ -12,6 +12,17 @@ called. Use `unwrap(jp)` to drop back to the underlying `JavaObject` /
 
 Field writes are not supported in this version; assign via the low-level
 JavaCall API if you need them.
+
+# Iteration
+
+A `JProxy` wrapping a Java `Iterable`, `Collection`, `Set`, `List`, `Map`, Java
+array, or raw `Iterator` is iterable. Each yielded value is passed through the
+same Java→Julia decoding used for `JProxy.method(...)` results — so
+`for s in JProxy(jstringList) … end` yields Julia `String`s, and
+`for n in JProxy(jintList) … end` yields `jint`s. Map iteration yields Julia
+`Pair{Any,Any}`, so `for (k, v) in JProxy(jmap) … end` destructures cleanly.
+`length(JProxy(jp))` works for `Collection`, `Map`, and arrays; raw `Iterator`s
+throw `ArgumentError` (no known size).
 """
 struct JProxy{T, W}
     wrapped::W

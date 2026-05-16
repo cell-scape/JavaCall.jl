@@ -4,6 +4,12 @@
 
 ### Added
 
+- `for x in JProxy(jobj) … end` now works for Java `Iterable`/`Collection`/`Set`/`List`,
+  `Map`, Java arrays, and raw `Iterator`. Maps yield `Pair{Any,Any}` so
+  `for (k, v) in JProxy(jmap) … end` destructures. `Base.length` is defined for
+  `Collection`/`Map`/array (raw `Iterator`s throw `ArgumentError`). Each yielded
+  element is decoded the same way `JProxy(obj).method(...)` results are
+  (`narrow` + `JString`→`String` + boxed-primitive→Julia).
 - `@jimport` gained `using`-style multi-import grammars: `@jimport java.util:
   ArrayList, HashMap, Map => JMap` binds three locals from one package, and
   `@jimport (java.util.ArrayList, java.lang.System)` binds across packages.

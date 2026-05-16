@@ -105,6 +105,13 @@ as a raw `JavaObject` (not narrowed) — `convert`/`narrow` it yourself if neede
 and implicit `String`↔`JString` / `Vector`↔`JList` widening. Use explicit
 `convert` and the low-level `jcall` for those cases.
 
+**Iteration.** `for x in JProxy(obj) … end` works on Java `Iterable`/`Collection`/`Set`/`List`, `Map`,
+Java arrays (primitive and object), and raw `Iterator`. Maps yield `Pair{Any,Any}` so destructuring
+works: `for (k, v) in JProxy(jmap); println("$k → $v"); end`. Each element is decoded the same way
+JProxy method-call results are (narrowed; `JString` → `String`; boxed primitives unboxed). Use
+`length(JProxy(obj))` for sized containers (`Collection`/`Map`/array); raw `Iterator`s have no
+known length and `length` on them throws.
+
 ## Julia version compatibility
 
 JavaCall.jl 0.9 requires Julia 1.12 or newer. CI tests Julia 1.12 (`min`), Julia LTS, and the latest stable release. For older Julia versions, use JavaCall.jl 0.8.x.
