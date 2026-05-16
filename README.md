@@ -114,11 +114,11 @@ known length and `length` on them throws.
 
 ## Julia version compatibility
 
-JavaCall.jl 0.9 requires Julia 1.12 or newer. CI tests Julia 1.12 (`min`), Julia LTS, and the latest stable release. For older Julia versions, use JavaCall.jl 0.8.x.
+JavaCall.jl 0.10 requires Julia 1.12 or newer. CI tests Julia 1.12 (`min`), Julia LTS, and the latest stable release. For older Julia versions, use JavaCall.jl 0.8.x.
 
 ## Threading and platform support
 
-JavaCall.jl 0.9 supports multithreaded JNI access on Linux, macOS, and Windows alike. The package attaches each Julia OS thread to the JVM lazily on first use; there is no Windows-specific pinning.
+JavaCall.jl 0.10 supports multithreaded JNI access on Linux, macOS, and Windows alike. The package attaches each Julia OS thread to the JVM lazily on first use; there is no Windows-specific pinning.
 
 For **synchronous** `jcall` / `jnew` / `jfield` on regular tasks (including `Threads.@threads` and `Threads.@spawn` — both sticky and non-sticky), no environment variables are required.
 

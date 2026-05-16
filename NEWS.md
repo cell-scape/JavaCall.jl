@@ -1,6 +1,6 @@
 # JavaCall.jl release notes
 
-## Unreleased
+## v0.10.0
 
 ### Added
 

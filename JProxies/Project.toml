@@ -1,12 +1,12 @@
 name = "JProxies"
 uuid = "5876e902-ba5b-11ea-3851-9ff53fa1e944"
-version = "0.9.0"
+version = "0.10.0"
 
 [deps]
 JavaCall = "494afd89-becb-516b-aafa-70d2670c0337"
 
 [compat]
-JavaCall = "0.9"
+JavaCall = "0.10"
 julia = "1.12"
 
 [extras]
