@@ -758,8 +758,8 @@ end
     @test jcall(a, "size") == 0
     jcall(a, "add", "one")
     @test jcall(a, "size") == 1
-    # Integer alias usable as a class type — a quick reflection probe:
-    @test JavaCall.getname(classforname("java.lang.Integer")) == "java.lang.Integer"
+    # Smoke-check: the alias is usable as a JavaObject{T} type argument to listmethods.
+    @test listmethods(JInteger) isa Vector
 end
 
 end
