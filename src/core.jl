@@ -368,7 +368,6 @@ const JSet        = JavaObject{Symbol("java.util.Set")}
 const JHashSet    = JavaObject{Symbol("java.util.HashSet")}
 const JCollection = JavaObject{Symbol("java.util.Collection")}
 const JIterator   = JavaObject{Symbol("java.util.Iterator")}
-const JIterable   = JavaObject{Symbol("java.lang.Iterable")}
 const JComparator = JavaObject{Symbol("java.util.Comparator")}
 
 # Boxed primitives
@@ -383,6 +382,7 @@ const JFloat     = JavaObject{Symbol("java.lang.Float")}
 const JDouble    = JavaObject{Symbol("java.lang.Double")}
 
 # java.lang misc
+const JIterable     = JavaObject{Symbol("java.lang.Iterable")}
 const JCharSequence = JavaObject{Symbol("java.lang.CharSequence")}
 const JThrowable    = JavaObject{Symbol("java.lang.Throwable")}
 const JException    = JavaObject{Symbol("java.lang.Exception")}
