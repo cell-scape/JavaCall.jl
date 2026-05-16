@@ -335,12 +335,17 @@ function checknull(ptr, msg="Unexpected null pointer from Java Native Interface"
 end
 
 """
-    JObject, JClass, JMethod, JConstructor, JField, JThread, JClassLoader, JString
+    JObject, JClass, JString, JMethod, JConstructor, JField, JThread, JClassLoader,
+    JList, JArrayList, JMap, JHashMap, JSet, JHashSet, JCollection, JIterator,
+    JIterable, JComparator, JNumber, JBoolean, JByte, JCharacter, JShort, JInteger,
+    JLong, JFloat, JDouble, JCharSequence, JThrowable, JException, JRunnable, JFile,
+    JInputStream, JOutputStream, JReader, JWriter, JDate, JCalendar, JProperties
 
 Convenience aliases for [`JavaObject{T}`](@ref) over commonly-used Java classes —
-`JObject === JavaObject{Symbol("java.lang.Object")}`, `JString ===
-JavaObject{Symbol("java.lang.String")}`, etc. They are used pervasively as
-return-type / argument-type arguments to [`jcall`](@ref).
+e.g. `JString === JavaObject{Symbol("java.lang.String")}`, `JArrayList ===
+JavaObject{Symbol("java.util.ArrayList")}`. They are used pervasively as
+return-type / argument-type arguments to [`jcall`](@ref) and as the first
+argument to [`jnew`](@ref).
 """
 const JClass = JavaObject{Symbol("java.lang.Class")}
 const JObject = JavaObject{Symbol("java.lang.Object")}
@@ -350,6 +355,50 @@ const JField = JavaObject{Symbol("java.lang.reflect.Field")}
 const JThread = JavaObject{Symbol("java.lang.Thread")}
 const JClassLoader = JavaObject{Symbol("java.lang.ClassLoader")}
 const JString = JavaObject{Symbol("java.lang.String")}
+
+# Phase 3 sub-2: broader set of built-in JavaObject{Symbol("…")} aliases for the
+# most-common Java standard-library classes. Each is exported from JavaCall.
+
+# Collections / util
+const JList       = JavaObject{Symbol("java.util.List")}
+const JArrayList  = JavaObject{Symbol("java.util.ArrayList")}
+const JMap        = JavaObject{Symbol("java.util.Map")}
+const JHashMap    = JavaObject{Symbol("java.util.HashMap")}
+const JSet        = JavaObject{Symbol("java.util.Set")}
+const JHashSet    = JavaObject{Symbol("java.util.HashSet")}
+const JCollection = JavaObject{Symbol("java.util.Collection")}
+const JIterator   = JavaObject{Symbol("java.util.Iterator")}
+const JIterable   = JavaObject{Symbol("java.lang.Iterable")}
+const JComparator = JavaObject{Symbol("java.util.Comparator")}
+
+# Boxed primitives
+const JNumber    = JavaObject{Symbol("java.lang.Number")}
+const JBoolean   = JavaObject{Symbol("java.lang.Boolean")}
+const JByte      = JavaObject{Symbol("java.lang.Byte")}
+const JCharacter = JavaObject{Symbol("java.lang.Character")}
+const JShort     = JavaObject{Symbol("java.lang.Short")}
+const JInteger   = JavaObject{Symbol("java.lang.Integer")}
+const JLong      = JavaObject{Symbol("java.lang.Long")}
+const JFloat     = JavaObject{Symbol("java.lang.Float")}
+const JDouble    = JavaObject{Symbol("java.lang.Double")}
+
+# java.lang misc
+const JCharSequence = JavaObject{Symbol("java.lang.CharSequence")}
+const JThrowable    = JavaObject{Symbol("java.lang.Throwable")}
+const JException    = JavaObject{Symbol("java.lang.Exception")}
+const JRunnable     = JavaObject{Symbol("java.lang.Runnable")}
+
+# IO
+const JFile         = JavaObject{Symbol("java.io.File")}
+const JInputStream  = JavaObject{Symbol("java.io.InputStream")}
+const JOutputStream = JavaObject{Symbol("java.io.OutputStream")}
+const JReader       = JavaObject{Symbol("java.io.Reader")}
+const JWriter       = JavaObject{Symbol("java.io.Writer")}
+
+# Util extras
+const JDate       = JavaObject{Symbol("java.util.Date")}
+const JCalendar   = JavaObject{Symbol("java.util.Calendar")}
+const JProperties = JavaObject{Symbol("java.util.Properties")}
 
 #JavaObject(ptr::Ptr{Nothing}) = ptr == C_NULL ? JavaObject(ptr) : JavaObject{Symbol(getclassname(getclass(ptr)))}(ptr)
 
