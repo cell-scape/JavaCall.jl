@@ -251,7 +251,7 @@ convert(::Type{jboolean}, obj::JavaObject{Symbol("java.lang.Boolean")}) = jcall(
 
 
 #The second term in this addition is due to the fact that Java converts all times to local time
-function convert(::Type{DateTime}, x::@jimport(java.util.Date))
+function convert(::Type{DateTime}, x::JDate)
     if isnull(x)
         Dates.DateTime(1970,1,1,0,0,0)
     else
@@ -262,49 +262,45 @@ end
 
 function convert(::Type{DateTime}, x::JavaObject)
     isnull(x) && return Dates.DateTime(1970,1,1,0,0,0)
-    JDate = @jimport(java.util.Date)
     if isConvertible(JDate, x)
         return convert(DateTime, convert(JDate, x))
-    elseif isConvertible(@jimport(java.util.Calendar), x)
+    elseif isConvertible(JCalendar, x)
         return convert(DateTime, jcall(x, "getTime", JDate, ()))
     end
 end
 
-function convert(::Type{@jimport(java.util.Properties)}, x::Dict)
-    Properties = @jimport(java.util.Properties)
-    p = Properties(())
+function convert(::Type{JProperties}, x::Dict)
+    p = JProperties(())
     for (n,v) in x
-        jcall(p, "setProperty", @jimport(java.lang.Object), (JString, JString), n, v)
+        jcall(p, "setProperty", JObject, (JString, JString), n, v)
     end
     return p
 end
 
-function convert(::Type{@jimport(java.util.HashMap)}, K::Type{JavaObject{X}}, V::Type{JavaObject{Y}},
+function convert(::Type{JHashMap}, K::Type{JavaObject{X}}, V::Type{JavaObject{Y}},
                  x::Dict) where {X,Y}
-    Hashmap = @jimport(java.util.HashMap)
-    p = Hashmap(())
+    p = JHashMap(())
     for (n,v) in x
-        jcall(p, "put", @jimport(java.lang.Object), (JObject, JObject), n, v)
+        jcall(p, "put", JObject, (JObject, JObject), n, v)
     end
     return p
 end
 
-function convert(::Type{@jimport(java.util.Map)}, K::Type{JavaObject{X}}, V::Type{JavaObject{Y}},
+function convert(::Type{JMap}, K::Type{JavaObject{X}}, V::Type{JavaObject{Y}},
                  x::Dict) where {X,Y}
-    convert(@jimport(java.util.Map), convert(@jimport(java.util.HashMap), K, V, x))
+    convert(JMap, convert(JHashMap, K, V, x))
 end
 
-function convert(::Type{@jimport(java.util.ArrayList)}, x::Vector, V::Type{JavaObject{X}}=JObject) where X
-    ArrayList = @jimport(java.util.ArrayList)
-    a = ArrayList(())
+function convert(::Type{JArrayList}, x::Vector, V::Type{JavaObject{X}}=JObject) where X
+    a = JArrayList(())
     for v in x
         jcall(a, "add", jboolean, (JObject,), convert(V, v))
     end
     return a
 end
 
-function convert(::Type{@jimport(java.util.List)}, x::Vector, V::Type{JavaObject{X}}=JObject) where X
-    convert(@jimport(java.util.ArrayList), x, V)
+function convert(::Type{JList}, x::Vector, V::Type{JavaObject{X}}=JObject) where X
+    convert(JArrayList, x, V)
 end
 
 # Convert a reference to a java.lang.String into a Julia string. Copies the underlying byte buffer
@@ -364,7 +360,7 @@ function convert(::Type{Array{T, 1}}, obj::JObject) where T
 end
 
 ##Iterator
-iterator(obj::JavaObject) = jcall(obj, "iterator", @jimport(java.util.Iterator), ())
+iterator(obj::JavaObject) = jcall(obj, "iterator", JIterator, ())
 
 """
     narrow(obj::JavaObject) -> JavaObject
@@ -376,7 +372,7 @@ back as `JavaObject{Symbol("java.lang.String")}`. Used to give `jcall` results a
 useful concrete type (and applied automatically when iterating a `JavaObject`).
 """
 function narrow(obj::JavaObject)
-    c = jcall(obj,"getClass", @jimport(java.lang.Class), ())
+    c = jcall(obj,"getClass", JClass, ())
     t = jcall(c, "getName", JString, ())
     return convert(JavaObject{Symbol(t)}, obj)
 end
@@ -385,7 +381,7 @@ has_next(itr::JavaObject) = (jcall(itr, "hasNext", jboolean, ()) == JNI_TRUE)
 
 function Base.iterate(itr::JavaObject, state=nothing)
     if has_next(itr)
-        o = jcall(itr, "next", @jimport(java.lang.Object), ())
+        o = jcall(itr, "next", JObject, ())
         return (narrow(o), state)
     else
         return nothing
