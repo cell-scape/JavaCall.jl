@@ -501,7 +501,7 @@ end
 function _jimport_colon(prefix, entries)
     pkg = sprint(Base.show_unquoted, prefix)
     isempty(entries) && error("@jimport: empty colon-form import list.")
-    assignments = Any[]
+    assignments = Any[]  # Any[], not Expr[]: the trailing :(nothing) is a Symbol, not an Expr
     for entry in entries
         short, target = _parse_short_entry(entry)
         fqn = string(pkg, ".", short)
@@ -528,7 +528,7 @@ end
 # package), or `FQN => Target`.
 function _jimport_tuple(entries)
     isempty(entries) && error("@jimport: empty tuple-form import list.")
-    assignments = Any[]
+    assignments = Any[]  # Any[], not Expr[]: the trailing :(nothing) is a Symbol, not an Expr
     for entry in entries
         fqn_expr, target = _parse_tuple_entry(entry)
         fqn = sprint(Base.show_unquoted, fqn_expr)
@@ -604,6 +604,10 @@ the common cases need no `@jimport` at all.
 A macro-expansion-time `error(...)` is raised on a malformed multi-import:
 non-Symbol rename target, empty colon-form import list, non-FQN tuple entry,
 etc.
+
+Note: multi-import forms emit plain `=` assignments — at module top level they
+bind non-`const` module globals. For the established `const` pattern, use the
+single-class form: `const JArrayList = @jimport java.util.ArrayList`.
 """
 macro jimport(class::Expr)
     # Colon form (single name): `@jimport package: Name`
