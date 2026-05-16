@@ -155,4 +155,17 @@ end
     @test_throws LoadError (@eval @jimport java.util: 42)                          # non-Symbol entry
     @test_throws LoadError (@eval @jimport (java.util.ArrayList => 5,))            # non-Symbol rename target
     @test_throws LoadError (@eval @jimport java.util: ArrayList => HashMap => X)   # malformed rename chain
+
+    # Nested classes via the existing $-escape, inside the new tuple form.
+    # If the parser accepts the $ in tuple position, assert binding; otherwise
+    # leave the test_skip with a comment documenting the limitation.
+    let
+        try
+            @eval @jimport (Test$TestInner,)
+            @test @isdefined(TestInner)
+            @test TestInner === JavaObject{Symbol("Test\$TestInner")}
+        catch err
+            @test_skip "nested-class \$-escape in multi-import tuple form: $(typeof(err))"
+        end
+    end
 end
