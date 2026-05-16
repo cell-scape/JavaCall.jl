@@ -67,10 +67,19 @@ function _step(state::Tuple{Symbol, JavaObject})
     iter = state[2]
     if jcall(iter, "hasNext", jboolean, ()) == 0x01
         if state[1] === :map_iter
-            # Iterator.next() returns Object; reinterpret as Map.Entry to resolve
-            # getKey()/getValue() against the Entry interface.
+            # Iterator.next() returns Object at the JNI level (Iterator's signature
+            # is `()Ljava/lang/Object;` — JNI method lookup is signature-exact, so
+            # we can't ask jcall for a JMapEntry return type directly: that yields
+            # NoSuchMethodError). Instead we take the JObject and unchecked-rewrap
+            # its ref as a JMapEntry so getKey()/getValue()'s method-ID lookup
+            # resolves against the Entry interface. The entrySet iterator's
+            # next() is contractually a Map.Entry, so the cast is sound. We steal
+            # the JObject's local ref (setting its inner ref to J_NULL so the
+            # finalizer becomes a no-op) — this avoids both an isAssignableFrom
+            # dynamic-cast (2 JNI calls in `convert`) and an extra NewLocalRef.
             obj = jcall(iter, "next", JObject, ())
-            entry = convert(JMapEntry, obj)
+            entry = JMapEntry(obj.ref)
+            obj.ref = JavaCall.J_NULL
             k = _juliafy(jcall(entry, "getKey",   JObject, ()))
             v = _juliafy(jcall(entry, "getValue", JObject, ()))
             return (k => v, state)
@@ -103,6 +112,7 @@ function _start_array(w::JavaObject, cls::JClass)
         fresh_ptr = JavaCall.with_env() do env
             JNI.NewLocalRef(Ptr(w), env)
         end
+        fresh_ptr == C_NULL && throw(JavaCall.JavaCallError("JProxy iteration: NewLocalRef returned NULL for primitive array (local ref table full?)"))
         jnivec = JavaCall.get_elements!(JNIVector{elty}(fresh_ptr))
         return _step((:prim_array, jnivec, len, 0))
     else

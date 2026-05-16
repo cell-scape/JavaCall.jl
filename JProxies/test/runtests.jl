@@ -113,76 +113,109 @@ end
 @testset "Phase 3 sub-3: JProxy iteration" begin
     JTest = @jimport Test
 
-    # --- Iterable / Collection / List of Strings -----------------------------
-    jl_strs = JavaCall.jnew(JavaCall.JArrayList)
-    JavaCall.jcall(jl_strs, "add", "a")
-    JavaCall.jcall(jl_strs, "add", "b")
-    @test collect(JProxy(jl_strs)) == ["a", "b"]
+    @testset "Iterable / List / Set" begin
+        # --- Iterable / Collection / List of Strings -----------------------------
+        jl_strs = JavaCall.jnew(JavaCall.JArrayList)
+        JavaCall.jcall(jl_strs, "add", "a")
+        JavaCall.jcall(jl_strs, "add", "b")
+        @test collect(JProxy(jl_strs)) == ["a", "b"]
 
-    # --- List of boxed integers --------------------------------------------
-    jl_ints = JavaCall.jnew(JavaCall.JArrayList)
-    box7  = JavaCall.jcall(JavaCall.JInteger, "valueOf", JavaCall.JInteger, (JavaCall.jint,), Int32(7))
-    box11 = JavaCall.jcall(JavaCall.JInteger, "valueOf", JavaCall.JInteger, (JavaCall.jint,), Int32(11))
-    JavaCall.jcall(jl_ints, "add", JavaCall.jboolean, (JavaCall.JObject,), box7)
-    JavaCall.jcall(jl_ints, "add", JavaCall.jboolean, (JavaCall.JObject,), box11)
-    @test collect(JProxy(jl_ints)) == [7, 11]
+        # --- List of boxed integers --------------------------------------------
+        jl_ints = JavaCall.jnew(JavaCall.JArrayList)
+        box7  = JavaCall.jcall(JavaCall.JInteger, "valueOf", JavaCall.JInteger, (JavaCall.jint,), Int32(7))
+        box11 = JavaCall.jcall(JavaCall.JInteger, "valueOf", JavaCall.JInteger, (JavaCall.jint,), Int32(11))
+        JavaCall.jcall(jl_ints, "add", JavaCall.jboolean, (JavaCall.JObject,), box7)
+        JavaCall.jcall(jl_ints, "add", JavaCall.jboolean, (JavaCall.JObject,), box11)
+        @test collect(JProxy(jl_ints)) == [7, 11]
 
-    # --- Set (single element for deterministic order) -----------------------
-    js = JavaCall.jnew(@jimport(java.util.HashSet))
-    JavaCall.jcall(js, "add", "x")
-    @test collect(JProxy(js)) == ["x"]
-
-    # --- Map: Pair yield + destructuring ------------------------------------
-    jm = JavaCall.jnew(JavaCall.JHashMap)
-    JavaCall.jcall(jm, "put", "k1", "v1")
-    @test collect(JProxy(jm)) == ["k1" => "v1"]
-    let captured = nothing
-        for (k, v) in JProxy(jm)
-            captured = (k, v)
-        end
-        @test captured == ("k1", "v1")
+        # --- Set (single element for deterministic order) -----------------------
+        js = JavaCall.jnew(@jimport(java.util.HashSet))
+        JavaCall.jcall(js, "add", "x")
+        @test collect(JProxy(js)) == ["x"]
     end
 
-    # --- Primitive int[] -- bypass jcall's auto-array-conversion so we get
-    # the raw JavaObject. The `signature(JavaObject{Symbol("[I")})` shape
-    # generates `L[I;` not `[I`, so `jcall` can't look up the static method
-    # via the explicit-form path; we call JNI directly to fetch the raw ref. -
-    JIntArr = JavaCall.JavaObject{Symbol("[I")}
-    arr_i = let cls = JavaCall.classforname("Test")
-        JavaCall.with_env() do env
-            mid = JavaCall.JNI.GetStaticMethodID(JavaCall.Ptr(cls), "intArray", "()[I", env)
-            JIntArr(JavaCall.JNI.CallStaticObjectMethodA(JavaCall.Ptr(cls), mid, JavaCall.JNI.JValue[], env))
+    @testset "Map" begin
+        # --- Map: Pair yield + destructuring ------------------------------------
+        jm = JavaCall.jnew(JavaCall.JHashMap)
+        JavaCall.jcall(jm, "put", "k1", "v1")
+        @test collect(JProxy(jm)) == ["k1" => "v1"]
+        let captured = nothing
+            for (k, v) in JProxy(jm)
+                captured = (k, v)
+            end
+            @test captured == ("k1", "v1")
         end
     end
-    @test collect(JProxy(arr_i)) == [10, 20, 30]
 
-    # --- Object[] of mixed elements (same direct-JNI bypass) ----------------
-    JObjArr = JavaCall.JavaObject{Symbol("[Ljava.lang.Object;")}
-    arr_o = let cls = JavaCall.classforname("Test")
-        JavaCall.with_env() do env
-            mid = JavaCall.JNI.GetStaticMethodID(JavaCall.Ptr(cls), "objArray", "()[Ljava/lang/Object;", env)
-            JObjArr(JavaCall.JNI.CallStaticObjectMethodA(JavaCall.Ptr(cls), mid, JavaCall.JNI.JValue[], env))
+    @testset "primitive int[]" begin
+        # --- Primitive int[] -- bypass jcall's auto-array-conversion so we get
+        # the raw JavaObject. The `signature(JavaObject{Symbol("[I")})` shape
+        # generates `L[I;` not `[I`, so `jcall` can't look up the static method
+        # via the explicit-form path; we call JNI directly to fetch the raw ref. -
+        JIntArr = JavaCall.JavaObject{Symbol("[I")}
+        arr_i = let cls = JavaCall.classforname("Test")
+            JavaCall.with_env() do env
+                mid = JavaCall.JNI.GetStaticMethodID(JavaCall.Ptr(cls), "intArray", "()[I", env)
+                JIntArr(JavaCall.JNI.CallStaticObjectMethodA(JavaCall.Ptr(cls), mid, JavaCall.JNI.JValue[], env))
+            end
         end
+        @test collect(JProxy(arr_i)) == [10, 20, 30]
     end
-    @test collect(JProxy(arr_o)) == ["a", 7]
 
-    # --- Raw Iterator (already an Iterator, no .iterator() call needed) -----
-    it = JavaCall.jcall(jl_strs, "iterator", JavaCall.JIterator, ())
-    @test collect(JProxy(it)) == ["a", "b"]
+    @testset "Object[]" begin
+        # --- Object[] of mixed elements (same direct-JNI bypass) ----------------
+        JObjArr = JavaCall.JavaObject{Symbol("[Ljava.lang.Object;")}
+        arr_o = let cls = JavaCall.classforname("Test")
+            JavaCall.with_env() do env
+                mid = JavaCall.JNI.GetStaticMethodID(JavaCall.Ptr(cls), "objArray", "()[Ljava/lang/Object;", env)
+                JObjArr(JavaCall.JNI.CallStaticObjectMethodA(JavaCall.Ptr(cls), mid, JavaCall.JNI.JValue[], env))
+            end
+        end
+        @test collect(JProxy(arr_o)) == ["a", 7]
+    end
 
-    # --- length() where defined --------------------------------------------
-    @test length(JProxy(jl_strs)) == 2
-    @test length(JProxy(jm)) == 1
-    @test length(JProxy(arr_i)) == 3
-    # raw Iterator has no length
-    it2 = JavaCall.jcall(jl_strs, "iterator", JavaCall.JIterator, ())
-    @test_throws ArgumentError length(JProxy(it2))
+    @testset "raw Iterator" begin
+        # --- Raw Iterator (already an Iterator, no .iterator() call needed) -----
+        jl_strs = JavaCall.jnew(JavaCall.JArrayList)
+        JavaCall.jcall(jl_strs, "add", "a")
+        JavaCall.jcall(jl_strs, "add", "b")
+        it = JavaCall.jcall(jl_strs, "iterator", JavaCall.JIterator, ())
+        @test collect(JProxy(it)) == ["a", "b"]
+        # raw Iterator has no length
+        it2 = JavaCall.jcall(jl_strs, "iterator", JavaCall.JIterator, ())
+        @test_throws ArgumentError length(JProxy(it2))
+    end
 
-    # --- Non-iterable rejection --------------------------------------------
-    jobj = JavaCall.jnew(@jimport(java.lang.Object))
-    @test_throws ArgumentError iterate(JProxy(jobj))
+    @testset "length on sized containers" begin
+        # Independent cheap fixtures so this testset doesn't depend on siblings.
+        jl_strs = JavaCall.jnew(JavaCall.JArrayList)
+        JavaCall.jcall(jl_strs, "add", "a")
+        JavaCall.jcall(jl_strs, "add", "b")
+        @test length(JProxy(jl_strs)) == 2
 
-    # --- Empty containers ---------------------------------------------------
-    @test isempty(collect(JProxy(JavaCall.jnew(JavaCall.JArrayList))))
-    @test isempty(collect(JProxy(JavaCall.jnew(JavaCall.JHashMap))))
+        jm = JavaCall.jnew(JavaCall.JHashMap)
+        JavaCall.jcall(jm, "put", "k1", "v1")
+        @test length(JProxy(jm)) == 1
+
+        JIntArr = JavaCall.JavaObject{Symbol("[I")}
+        arr_i = let cls = JavaCall.classforname("Test")
+            JavaCall.with_env() do env
+                mid = JavaCall.JNI.GetStaticMethodID(JavaCall.Ptr(cls), "intArray", "()[I", env)
+                JIntArr(JavaCall.JNI.CallStaticObjectMethodA(JavaCall.Ptr(cls), mid, JavaCall.JNI.JValue[], env))
+            end
+        end
+        @test length(JProxy(arr_i)) == 3
+    end
+
+    @testset "non-iterable rejection" begin
+        # --- Non-iterable rejection --------------------------------------------
+        jobj = JavaCall.jnew(@jimport(java.lang.Object))
+        @test_throws ArgumentError iterate(JProxy(jobj))
+    end
+
+    @testset "empty containers" begin
+        # --- Empty containers ---------------------------------------------------
+        @test isempty(collect(JProxy(JavaCall.jnew(JavaCall.JArrayList))))
+        @test isempty(collect(JProxy(JavaCall.jnew(JavaCall.JHashMap))))
+    end
 end
