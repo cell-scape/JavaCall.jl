@@ -48,6 +48,14 @@ julia> jcall(out, "println", Nothing, (JString,), "Hello World")
 Hello World
 ```
 
+If you need several classes from one package, use the `using`-style colon
+syntax: `@jimport java.util: ArrayList, HashMap`. For cross-package imports,
+use a tuple: `@jimport (java.util.ArrayList, java.lang.System)`. Both forms
+accept `=>` renames (`@jimport java.util: ArrayList => JArrayList`). JavaCall
+already ships built-in aliases for the standard library's most-common classes
+— `JList`, `JArrayList`, `JMap`, `JHashMap`, `JInteger`, `JRunnable`, `JFile`,
+and others — so the common cases need no `@jimport` at all.
+
 ## JProxies — ergonomic Java objects and Julia callbacks
 
 `JProxies` is a companion package shipped in this repository under `JProxies/` (it

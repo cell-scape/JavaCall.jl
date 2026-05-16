@@ -1,5 +1,24 @@
 # JavaCall.jl release notes
 
+## Unreleased
+
+### Added
+
+- `@jimport` gained `using`-style multi-import grammars: `@jimport java.util:
+  ArrayList, HashMap, Map => JMap` binds three locals from one package, and
+  `@jimport (java.util.ArrayList, java.lang.System)` binds across packages.
+  `=>` renames are supported in both forms. Existing single-class forms
+  (`@jimport java.util.ArrayList`, `"java.util.ArrayList"`, `@jimport(Outer$Inner)`)
+  are unchanged.
+- 31 new built-in `J*` aliases for common Java standard-library classes —
+  `JList`, `JArrayList`, `JMap`, `JHashMap`, `JSet`, `JHashSet`, `JCollection`,
+  `JIterator`, `JIterable`, `JComparator`, all the boxed primitives
+  (`JNumber`/`JBoolean`/`JByte`/`JCharacter`/`JShort`/`JInteger`/`JLong`/
+  `JFloat`/`JDouble`), `JCharSequence`, `JThrowable`, `JException`, `JRunnable`,
+  the basic `java.io` types (`JFile`/`JInputStream`/`JOutputStream`/`JReader`/
+  `JWriter`), and a few `java.util` extras (`JDate`/`JCalendar`/`JProperties`).
+  All exported alongside the existing `JObject`/`JClass`/`JString`/etc.
+
 ## v0.9.0
 
 A large internal modernization ("Phase 2"). The public calling API — `jcall`,
